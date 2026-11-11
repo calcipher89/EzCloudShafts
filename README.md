@@ -81,3 +81,9 @@ rendered from the sun would remove the limit, if a shot needs it.
 | `reference/check_kernel.py` | NumPy port of the kernel, checked on a synthetic scene against the true shadow. Prints a text report. |
 
 Bump `VERSION` in `python/build_group.py` for each tagged release.
+
+**After editing the kernel:** the build stops until you update `KERNEL_NUKE_HASH` and `KERNEL_SOURCE_SHA256` in `python/build_group.py`. Nuke silently cancels every render through a BlinkScript whose saved kernel hash is wrong, so the hash has to come from Nuke itself:
+
+1. Load the .blink into a BlinkScript in NukeX and recompile.
+2. Take the 5th word of its KernelDescription as `KERNEL_NUKE_HASH`.
+3. Set `KERNEL_SOURCE_SHA256` to `sha256sum` of the .blink.
