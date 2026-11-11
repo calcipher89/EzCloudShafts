@@ -29,6 +29,8 @@ rgba is the env render, or whatever **view** picks. Two layers are added:
 | --- | --- |
 | `shafts.rgb` | Sunlit in-scatter of the beams, coloured by the sun: an RGB colour matte for grading, or plus it over the comp. |
 | `shafts.a` | The same beams without colour, 0 to 1. |
+| `shafts_lit.rgb` | The share of the haze along each pixel's view that is sunlit: 1 all lit, 0 all under cloud, whatever the haze amount. Grade the env's haze (or atmos layers) up where it's 1 and down where it's 0, so the air between the beams goes dark as in nature. |
+| `shafts_lit.a` | How much haze in-scatter the view ray has (0 to 1), lit or not. |
 | `cloudshadow.a` | Sun visibility on the ground: 1 lit, 0 under cloud, with soft edges. Multiply the sun light group by it, or use it as a grade matte. |
 | `cloudshadow.rgb` | The gobo at the ground from the sun's centre, unsoftened (the **Gobo Check** view), for lining it up. |
 

@@ -32,14 +32,15 @@ KERNEL = "EzCloudShafts"
 # on "computing". The hash can't be worked out without Nuke, so it's pinned to the source it
 # came from. After editing the kernel: load the .blink in a BlinkScript in NukeX, recompile,
 # take the 5th word of its KernelDescription, and update both of these.
-KERNEL_SOURCE_SHA256 = "dd759221e4f55bf6299961f24866905d8e952fc1a247df1798a72407fab8d593"
-KERNEL_NUKE_HASH = "2e0f79eebf381953ab50a40fa16f957c094fb905ada6fc9185feed17ea5bd6b9"
+KERNEL_SOURCE_SHA256 = "0b2c04f075fd13c3f3910f69da508a71a7a1c978b30d5da2c1f6096f98f020c6"
+KERNEL_NUKE_HASH = "PENDING"  # to be read from NukeX for the new source
 GROUP_PATH = os.path.join(ROOT, "groups", "EzCloudShafts_group.nk")
 GIZMO_PATH = os.path.join(ROOT, "gizmos", "EzCloudShafts.gizmo")
 
 LAYERS = {"P": ["red", "green", "blue"],
           "shafts": ["red", "green", "blue", "alpha"],
           "cloudshadow": ["red", "green", "blue", "alpha"],
+          "shafts_lit": ["red", "green", "blue", "alpha"],
           "atmos_haze_sun": ["red", "green", "blue"]}
 
 # Kernel parameters, in the kernel's order: (name, variable, type, count, default).
@@ -104,7 +105,7 @@ def _b64(kind, count, value):
 def kernel_description(source):
     """What a saved BlinkScript node carries about its compiled kernel, so Nuke can make the
     parameter knobs before it compiles the source again."""
-    if hashlib.sha256(source.encode()).hexdigest() != KERNEL_SOURCE_SHA256:
+    if hashlib.sha256(source.encode()).hexdigest() != KERNEL_SOURCE_SHA256 or KERNEL_NUKE_HASH == "PENDING":
         sys.exit("The kernel changed: update KERNEL_NUKE_HASH and KERNEL_SOURCE_SHA256 (see their comment).")
     parts = ["3", '"%s"' % KERNEL, "iterate", "pixelWise", KERNEL_NUKE_HASH,
              str(len(IMAGES))]
@@ -273,9 +274,9 @@ def knob_lines():
              "units from the EzAtmosScatter in 'atmos', and reports how much of the ground the gobo reaches. "
              "Run it at a frame where the clouds are in view."), q(ANALYZE)))
     add('addUserKnob {4 view t %s -STARTLINE M {Passthrough "Shafts Over Env" "Shadow Matte" "Gobo Check" '
-        '"Shafts Matte"}}'
+        '"Shafts Matte" "Lit Share"}}'
         % q("What the main rgb shows. The passes are always written to the shafts and cloudshadow layers; "
-            "Passthrough leaves rgba as the env render."))
+            "Passthrough leaves rgba as the env render. Lit Share shows shafts_lit: 1 where the haze is sunlit, 0 under cloud."))
     add('view "Shafts Over Env"')
     add('addUserKnob {4 viewer_resolution l "viewer resolution" t %s M {Full Half Quarter}}'
         % q("Size the passes are computed at in the Nuke GUI, then scaled back up. Half is about four times "
@@ -516,20 +517,27 @@ def nodes(source):
          ["inputs 3"] + blink_node("Pass_Ground", 1, source, "WorkPosMatte")),
         ("Full_Shafts", "Reformat", ["Pass_Shafts"], full_reformat()),
         ("Full_Ground", "Reformat", ["Pass_Ground"], full_reformat()),
+        ("Pass_LitShare", "BlinkScript", ["WorkPosShafts", "CloudsOrNone", "AtmosOrNone"],
+         ["inputs 3"] + blink_node("Pass_LitShare", 2, source, "WorkPosShafts")),
+        ("Full_LitShare", "Reformat", ["Pass_LitShare"], full_reformat()),
         ("Layer_Shafts", "Copy", ["env", "Full_Shafts"],
          ["inputs 2"] + ["from%d rgba.%s\n  to%d shafts.%s" % (i, c, i, c)
                          for i, c in enumerate(("red", "green", "blue", "alpha"))]),
         ("Layer_CloudShadow", "Copy", ["Layer_Shafts", "Full_Ground"],
          ["inputs 2"] + ["from%d rgba.%s\n  to%d cloudshadow.%s" % (i, c, i, c)
                          for i, c in enumerate(("red", "green", "blue", "alpha"))]),
-        ("ShaftsOver", "Merge2", ["Layer_CloudShadow", "Full_Shafts"], ["inputs 2", "operation plus", "output rgb"]),
+        ("Layer_LitShare", "Copy", ["Layer_CloudShadow", "Full_LitShare"],
+         ["inputs 2"] + ["from%d rgba.%s\n  to%d shafts_lit.%s" % (i, c, i, c)
+                         for i, c in enumerate(("red", "green", "blue", "alpha"))]),
+        ("ShaftsOver", "Merge2", ["Layer_LitShare", "Full_Shafts"], ["inputs 2", "operation plus", "output rgb"]),
         ("ShadowView", "Shuffle2", ["Full_Ground"], ["fromInput1 {{0} B}", "in1 rgba", "fromInput2 {{0} B}",
                                                     "mappings " + ALPHA_TO_RGB]),
         ("ShaftsMatteView", "Shuffle2", ["Full_Shafts"], ["fromInput1 {{0} B}", "in1 rgba", "fromInput2 {{0} B}",
                                                           "mappings " + ALPHA_TO_RGB]),
-        ("ViewOutput", "Switch", ["Layer_CloudShadow", "ShaftsOver", "ShadowView", "Full_Ground", "ShaftsMatteView"],
-         ["inputs 5", "which {{parent.view}}"]),
-        ("MainRGB", "Copy", ["Layer_CloudShadow", "ViewOutput"], ["inputs 2", "channels rgb"]),
+        ("ViewOutput", "Switch", ["Layer_LitShare", "ShaftsOver", "ShadowView", "Full_Ground", "ShaftsMatteView",
+                                  "Full_LitShare"],
+         ["inputs 6", "which {{parent.view}}"]),
+        ("MainRGB", "Copy", ["Layer_LitShare", "ViewOutput"], ["inputs 2", "channels rgb"]),
         ("Output1", "Output", ["MainRGB"], []),
     ]
 
