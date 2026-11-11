@@ -568,6 +568,127 @@ else:
 """
 
 
+# ---- Bake ----------------------------------------------------------------------------------
+# The bake path: 'bake file' when set, else <folder>/<script>/<node>/<script>_<node>.####.exr.
+# Both knobs may use $VAR or Tcl such as [getenv JOB]; a variable that isn't set empties the
+# path, so nothing lands in a wrong place. Python inside Tcl braces: no braces, double quotes
+# or backslashes in it.
+BAKE_PATH = ("[python -execlocal {import os\n"
+             "g = nuke.thisGroup()\n"
+             "ready = g.knob('bake_file') is not None and g.knob('bake_folder') is not None\n"
+             "s = nuke.root().name()\n"
+             "base = os.path.splitext(os.path.basename(s))[0]\n"
+             "p = g['bake_file'].value().strip() if ready else ''\n"
+             "if not p:\n"
+             "    d = g['bake_folder'].value().strip() if ready else ''\n"
+             "    d = d or os.path.join(os.path.dirname(s), 'ezcloudshafts_cache')\n"
+             "    p = d.rstrip('/') + '/' + base + '/' + g.name() + '/' + base + '_' + g.name() + '.####.exr'\n"
+             "p = os.path.expandvars(p)\n"
+             "if '[' in p:\n"
+             "    try:\n"
+             "        p = nuke.tcl('subst', p)\n"
+             "    except RuntimeError:\n"
+             "        p = ''\n"
+             "ret = '' if '$' in p or not ready else p.replace(chr(92), '/')}]")
+
+# The settings that shape the baked layers.
+BAKE_WATCH = ["position_layer", "scene_scale", "sun_from", "sun_direction", "cloud_height", "cloud_density",
+              "shadow_strength", "gap_contrast", "gap_threshold", "outside_frame", "penumbra", "samples", "drift_x",
+              "drift_z", "drift_frame", "shaft_density", "haze_height", "shaft_start", "max_distance", "sky_distance",
+              "march_steps", "color_from", "shaft_color", "shaft_intensity", "soften", "edge_aware",
+              "render_resolution", "shafts_resolution"]
+
+BAKE_HASH = ("import hashlib\n"
+             "s = []\n"
+             "for k in %r:\n"
+             "    if g.knob(k):\n"
+             "        s.append((k, g[k].toScript()))\n"
+             "# Where the camera and sun are now, read as values since those knobs are expressions.\n"
+             "s.append(repr(g['sun_in_use'].value()))\n"
+             "s.append(repr(g['cam_world_matrix'].value()))\n"
+             "h = hashlib.md5(repr(s).encode()).hexdigest()\n" % (BAKE_WATCH,))
+
+# Whether the bake can be used: it exists and the settings still match. Sets the hidden
+# bake_valid knob the Use_* Switches read, and a label. Run from knobChanged and onCreate.
+BAKE_CHECK = ("g = nuke.thisNode()\n"
+              "if g.knob('bake_valid') is not None:\n" + "".join("    " + line + "\n" for line in (
+                  BAKE_HASH +
+                  "import os, re\n"
+                  "r = g.node('BakeRead')\n"
+                  "p = (nuke.filename(r) or '') if r is not None else ''\n"
+                  "fr = int(g['baked_first'].value())\n"
+                  "m = re.search('(#+)|%(0?[0-9]*)d', p)\n"
+                  "if m is not None:\n"
+                  "    width = len(m.group(1)) if m.group(1) else int(m.group(2) or 1)\n"
+                  "    p = p[:m.start()] + str(fr).zfill(width) + p[m.end():]\n"
+                  "ok = bool(g['baked_hash'].value()) and g['baked_hash'].value() == h and os.path.exists(p)\n"
+                  "if bool(g['bake_valid'].value()) != ok:\n"
+                  "    g['bake_valid'].setValue(ok)\n"
+                  "text = ('baked' if ok else 'bake out of date: live') if g['use_baked'].value() and g['baked_hash'].value() else ''\n"
+                  "if g['label'].value() in ('', 'baked', 'bake out of date: live') and g['label'].value() != text:\n"
+                  "    g['label'].setValue(text)\n").splitlines()))
+
+KNOB_CHANGED = ("if nuke.thisKnob().name() in %r:\n" % (BAKE_WATCH + ["use_baked", "bake_file", "bake_folder", "baked_hash",
+                                                                       "baked_first", "inputChange"]) +
+                "".join("    " + line + "\n" for line in BAKE_CHECK.splitlines()))
+
+ON_CREATE = ("g = nuke.thisNode()\n"
+             "if g['bake_first'].value() == 0 and g['bake_last'].value() == 0:\n"
+             "    g['bake_first'].setValue(int(nuke.root()['first_frame'].value()))\n"
+             "    g['bake_last'].setValue(int(nuke.root()['last_frame'].value()))\n" + BAKE_CHECK)
+
+# Stops a bake whose path didn't resolve, and makes its folders.
+BAKE_PATH_CHECK = ("import os\n"
+                   "path = nuke.filename(g.node('BakeRead')) or ''\n"
+                   "bad = '' if path and os.path.isabs(path) else ('the bake folder uses an environment variable that '\n"
+                   "    'is not set in Nuke' if path == '' else 'the bake path is not a full path: ' + path)\n"
+                   "if not bad and not path.lower().endswith('.exr'):\n"
+                   "    bad = 'bake file is a folder, not a file name like name.####.exr'\n"
+                   "if not bad and not os.path.isdir(os.path.dirname(path)):\n"
+                   "    try:\n"
+                   "        os.makedirs(os.path.dirname(path))\n"
+                   "    except OSError as e:\n"
+                   "        bad = 'cannot create ' + os.path.dirname(path) + ' (' + str(e.strerror or e) + ')'\n"
+                   "if bad:\n"
+                   "    nuke.message('Not baked: ' + bad + '.')\n")
+
+BAKE_RANGE = ("first, last = int(g['bake_first'].value()), int(g['bake_last'].value())\n"
+              "if last < first:\n"
+              "    first, last = last, first\n")
+
+BAKE_NOW = ("g = nuke.thisNode()\n" + BAKE_PATH_CHECK +
+            "if not bad:\n" + "".join("    " + line + "\n" for line in (
+                BAKE_HASH + BAKE_RANGE +
+                "use = g['use_baked'].value()\n"
+                "g['use_baked'].setValue(False)\n"
+                "try:\n"
+                "    with g:\n"
+                "        nuke.execute(nuke.toNode('BakeWrite'), first, last)\n"
+                "    g['baked_hash'].setValue(h)\n"
+                "    g['baked_first'].setValue(first)\n"
+                "    g['baked_last'].setValue(last)\n"
+                "finally:\n"
+                "    g['use_baked'].setValue(use)\n" + BAKE_CHECK).splitlines()))
+
+BAKE_FARM = ("g = nuke.thisNode()\n" + BAKE_PATH_CHECK +
+             "if not bad:\n" + "".join("    " + line + "\n" for line in (
+                 BAKE_HASH + BAKE_RANGE +
+                 "with (g.parent() or nuke.root()):\n"
+                 "    w = nuke.nodes.Write(name=g.name() + '_BakeWrite', file=path, file_type='exr', channels='all')\n"
+                 "    w['create_directories'].setValue(True)\n"
+                 "    w['use_limit'].setValue(True)\n"
+                 "    w['first'].setValue(first)\n"
+                 "    w['last'].setValue(last)\n"
+                 "    w.setInput(0, g)\n"
+                 "    w.setXYpos(g.xpos(), g.ypos() + 80)\n"
+                 "g['baked_hash'].setValue(h)\n"
+                 "g['baked_first'].setValue(first)\n"
+                 "g['baked_last'].setValue(last)\n"
+                 "g['bake_valid'].setValue(True)\n"
+                 "if nuke.GUI:\n"
+                 "    nuke.message('Render %s on the farm before the comp. It writes ' % w.name() + path)\n").splitlines()))
+
+
 # ---- The group's knobs -------------------------------------------------------------------
 
 def knob_lines():
@@ -729,6 +850,31 @@ def knob_lines():
     add('addUserKnob {7 comp_shafts l "shafts" t %s R 0 2}' % q("How much of shafts.rgb is added on top."))
     add('comp_shafts 1')
 
+    add('addUserKnob {26 bake_divider l Bake}')
+    add('addUserKnob {2 bake_folder l "bake folder" t %s}'
+        % q("Where bakes go, for example on the job so the farm can read them. Each script and node gets its own "
+            "subfolder. $VAR and [getenv VAR] work. Empty: an ezcloudshafts_cache folder beside the script."))
+    add('bake_folder %s' % q("[getenv NUKE_TEMP_DIR]/ezCloudShafts"))
+    add('addUserKnob {2 bake_file l "bake file" t %s}'
+        % q("Leave empty to use 'bake folder'. A full file path with #### overrides it for this node."))
+    add('addUserKnob {3 bake_first l "bake range" t %s}' % q("First frame to bake."))
+    add('addUserKnob {3 bake_last l "" t %s -STARTLINE}' % q("Last frame to bake."))
+    add('addUserKnob {22 bake_now l "bake now" t %s T %s +STARTLINE}'
+        % (q("Writes the shafts, shafts_lit and cloudshadow layers to the bake file here and now."), q(BAKE_NOW)))
+    add('addUserKnob {22 bake_farm_write l "make farm bake Write" t %s T %s -STARTLINE}'
+        % (q("Adds a Write below this node with the bake path, to render on the farm before the comp."), q(BAKE_FARM)))
+    add('addUserKnob {6 use_baked l "use baked" t %s +STARTLINE}'
+        % q("Read the bake instead of computing, but only while it exists and the settings still match it. "
+            "Otherwise the node computes live and its label says the bake is out of date. The check runs when a "
+            "knob or input of this node changes and when the script opens; after changing the camera or clouds "
+            "upstream, bake again."))
+    add('use_baked true')
+    add('addUserKnob {1 baked_hash +INVISIBLE}')
+    add('addUserKnob {3 baked_first +INVISIBLE}')
+    add('addUserKnob {3 baked_last +INVISIBLE}')
+    add('addUserKnob {6 bake_valid -STARTLINE +INVISIBLE}')
+    add('addUserKnob {22 bake_check +INVISIBLE T %s}' % q(BAKE_CHECK))
+
     add('addUserKnob {26 version_divider l "" +STARTLINE}')
     add('addUserKnob {26 version T "EzCloudShafts v%s"}' % VERSION)
 
@@ -851,6 +997,23 @@ def full_reformat():
             "box_fixed true", "resize distort", "filter cubic"]
 
 
+def layer_copy(layer):
+    """Copy knobs: rgba into the four channels of a layer."""
+    return ["inputs 2"] + ["from%d rgba.%s\n  to%d %s.%s" % (i, c, i, layer, c)
+                           for i, c in enumerate(("red", "green", "blue", "alpha"))]
+
+
+def layer_pick(layer):
+    """Shuffle2 knobs: a four-channel layer to rgba."""
+    maps = " ".join("%s.%s 0 %d rgba.%s 0 %d" % (layer, c, i, c, i)
+                    for i, c in enumerate(("red", "green", "blue", "alpha")))
+    return ["fromInput1 {{0} B}", "in1 " + layer, "fromInput2 {{0} B}", 'mappings "4 %s"' % maps]
+
+
+def use_baked():
+    return ["inputs 2", 'which {{"parent.use_baked && parent.bake_valid"}}']
+
+
 def nodes(source):
     """(name, class, [input names], [knob lines]) in creation order."""
     tiny = '"8 4 0 0 8 4 1 EzCloudShafts_tiny"'
@@ -893,30 +1056,47 @@ def nodes(source):
         ("Soft_LitShare_Edge", "BlinkScript", ["Full_LitShare", "PositionPick"], soften_node()),
         ("Soft_LitShare", "Switch", ["Soft_LitShare_Blur", "Soft_LitShare_Edge"],
          ["inputs 2", "which {{parent.edge_aware}}"]),
-        ("Layer_Shafts", "Copy", ["env", "Soft_Shafts"],
+        # The bake: what the passes make, written out, read back, and picked between.
+        ("Bake_Shafts", "Copy", ["env", "Soft_Shafts"], layer_copy("shafts")),
+        ("Bake_Ground", "Copy", ["Bake_Shafts", "Full_Ground"], layer_copy("cloudshadow")),
+        ("Bake_LitShare", "Copy", ["Bake_Ground", "Soft_LitShare"], layer_copy("shafts_lit")),
+        ("BakeKeep", "Remove", ["Bake_LitShare"], ["operation keep", "channels shafts", "channels2 cloudshadow",
+                                                   "channels3 shafts_lit"]),
+        ("BakeWrite", "Write", ["BakeKeep"], ["channels all", "file " + q(BAKE_PATH), "file_type exr",
+                                              "first_part rgba", "create_directories true"]),
+        ("BakeRead", "Read", [], ["inputs 0", "file " + q(BAKE_PATH), "first {{parent.baked_first}}",
+                                  "last {{parent.baked_last}}", "origfirst {{parent.baked_first}}",
+                                  "origlast {{parent.baked_last}}", "on_error black"]),
+        ("Baked_Shafts", "Shuffle2", ["BakeRead"], layer_pick("shafts")),
+        ("Baked_Ground", "Shuffle2", ["BakeRead"], layer_pick("cloudshadow")),
+        ("Baked_LitShare", "Shuffle2", ["BakeRead"], layer_pick("shafts_lit")),
+        ("Use_Shafts", "Switch", ["Soft_Shafts", "Baked_Shafts"], use_baked()),
+        ("Use_Ground", "Switch", ["Full_Ground", "Baked_Ground"], use_baked()),
+        ("Use_LitShare", "Switch", ["Soft_LitShare", "Baked_LitShare"], use_baked()),
+        ("Layer_Shafts", "Copy", ["env", "Use_Shafts"],
          ["inputs 2"] + ["from%d rgba.%s\n  to%d shafts.%s" % (i, c, i, c)
                          for i, c in enumerate(("red", "green", "blue", "alpha"))]),
-        ("Layer_CloudShadow", "Copy", ["Layer_Shafts", "Full_Ground"],
+        ("Layer_CloudShadow", "Copy", ["Layer_Shafts", "Use_Ground"],
          ["inputs 2"] + ["from%d rgba.%s\n  to%d cloudshadow.%s" % (i, c, i, c)
                          for i, c in enumerate(("red", "green", "blue", "alpha"))]),
-        ("Layer_LitShare", "Copy", ["Layer_CloudShadow", "Soft_LitShare"],
+        ("Layer_LitShare", "Copy", ["Layer_CloudShadow", "Use_LitShare"],
          ["inputs 2"] + ["from%d rgba.%s\n  to%d shafts_lit.%s" % (i, c, i, c)
                          for i, c in enumerate(("red", "green", "blue", "alpha"))]),
-        ("ShaftsOver", "Merge2", ["Layer_LitShare", "Soft_Shafts"], ["inputs 2", "operation plus", "output rgb"]),
-        ("ShadowView", "Shuffle2", ["Full_Ground"], ["fromInput1 {{0} B}", "in1 rgba", "fromInput2 {{0} B}",
+        ("ShaftsOver", "Merge2", ["Layer_LitShare", "Use_Shafts"], ["inputs 2", "operation plus", "output rgb"]),
+        ("ShadowView", "Shuffle2", ["Use_Ground"], ["fromInput1 {{0} B}", "in1 rgba", "fromInput2 {{0} B}",
                                                     "mappings " + ALPHA_TO_RGB]),
-        ("ShaftsMatteView", "Shuffle2", ["Soft_Shafts"], ["fromInput1 {{0} B}", "in1 rgba", "fromInput2 {{0} B}",
+        ("ShaftsMatteView", "Shuffle2", ["Use_Shafts"], ["fromInput1 {{0} B}", "in1 rgba", "fromInput2 {{0} B}",
                                                           "mappings " + ALPHA_TO_RGB]),
         # The Comp view: cloud shadow on the sun light, haze from shafts_lit, then the shafts.
         ("SunPick", "Shuffle2", ["env"], ["fromInput1 {{0} B}", "in1 rgba", "fromInput2 {{0} B}",
                                           "mappings " + shuffle_mappings("rgba")]),
         ("SunOrBeauty", "Switch", ["env", "SunPick"], ["inputs 2", "which {{parent.use_sun_layer}}"]),
-        ("Comp_ShadowAmount", "Expression", ["Full_Ground"],
+        ("Comp_ShadowAmount", "Expression", ["Use_Ground"],
          ['expr%d "(1-a)*parent.comp_shadow"' % i for i in range(3)]),
         ("Comp_SunLost", "Merge2", ["Comp_ShadowAmount", "SunOrBeauty"],
          ["inputs 2", "operation multiply", "output rgb"]),
         ("Comp_Land", "Merge2", ["env", "Comp_SunLost"], ["inputs 2", "operation from", "output rgb"]),
-        ("Comp_Transmittance", "Expression", ["Soft_LitShare"],
+        ("Comp_Transmittance", "Expression", ["Use_LitShare"],
          ['expr%d "pow(clamp(1-a,0,1), parent.comp_haze*parent.comp_haze_falloff.%s)"' % (i, c)
           for i, c in enumerate("rgb")] + ["expr3 r"]),
         ("Comp_LandHazed", "Merge2", ["Comp_Land", "Comp_Transmittance"],
@@ -926,10 +1106,10 @@ def nodes(source):
           '(parent.comp_haze_lit-parent.comp_haze_shadow)*a)"' % (i, c, c) for i, c in enumerate("rgb")]),
         ("Comp_PlusHaze", "Merge2", ["Comp_LandHazed", "Comp_HazeLight"],
          ["inputs 2", "operation plus", "output rgb"]),
-        ("Comp_PlusShafts", "Merge2", ["Comp_PlusHaze", "Soft_Shafts"],
+        ("Comp_PlusShafts", "Merge2", ["Comp_PlusHaze", "Use_Shafts"],
          ["inputs 2", "operation plus", "output rgb", "mix {{parent.comp_shafts}}"]),
-        ("ViewOutput", "Switch", ["Layer_LitShare", "ShaftsOver", "ShadowView", "Full_Ground", "ShaftsMatteView",
-                                  "Soft_LitShare", "Comp_PlusShafts"],
+        ("ViewOutput", "Switch", ["Layer_LitShare", "ShaftsOver", "ShadowView", "Use_Ground", "ShaftsMatteView",
+                                  "Use_LitShare", "Comp_PlusShafts"],
          ["inputs 7", "which {{parent.view}}"]),
         ("MainRGB", "Copy", ["Layer_LitShare", "ViewOutput"], ["inputs 2", "channels rgb"]),
         ("Output1", "Output", ["MainRGB"], []),
@@ -944,6 +1124,8 @@ def write(path, kind):
         out.append("add_layer {%s %s}" % (layer, " ".join("%s.%s" % (layer, c) for c in chans)))
     out.append("%s {" % kind)
     out.append(" name EzCloudShafts1")
+    out.append(" onCreate " + q(ON_CREATE))
+    out.append(" knobChanged " + q(KNOB_CHANGED))
     out.append(" tile_color 0xb08a4aff")
     out += [" " + line for line in knob_lines() + group_expressions()]
     out.append("}")

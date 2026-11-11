@@ -6,6 +6,8 @@ add_layer {shafts_lit shafts_lit.red shafts_lit.green shafts_lit.blue shafts_lit
 add_layer {atmos_haze_sun atmos_haze_sun.red atmos_haze_sun.green atmos_haze_sun.blue}
 Gizmo {
  name EzCloudShafts1
+ onCreate "g = nuke.thisNode()\nif g\['bake_first'].value() == 0 and g\['bake_last'].value() == 0:\n    g\['bake_first'].setValue(int(nuke.root()\['first_frame'].value()))\n    g\['bake_last'].setValue(int(nuke.root()\['last_frame'].value()))\ng = nuke.thisNode()\nif g.knob('bake_valid') is not None:\n    import hashlib\n    s = \[]\n    for k in \['position_layer', 'scene_scale', 'sun_from', 'sun_direction', 'cloud_height', 'cloud_density', 'shadow_strength', 'gap_contrast', 'gap_threshold', 'outside_frame', 'penumbra', 'samples', 'drift_x', 'drift_z', 'drift_frame', 'shaft_density', 'haze_height', 'shaft_start', 'max_distance', 'sky_distance', 'march_steps', 'color_from', 'shaft_color', 'shaft_intensity', 'soften', 'edge_aware', 'render_resolution', 'shafts_resolution']:\n        if g.knob(k):\n            s.append((k, g\[k].toScript()))\n    # Where the camera and sun are now, read as values since those knobs are expressions.\n    s.append(repr(g\['sun_in_use'].value()))\n    s.append(repr(g\['cam_world_matrix'].value()))\n    h = hashlib.md5(repr(s).encode()).hexdigest()\n    import os, re\n    r = g.node('BakeRead')\n    p = (nuke.filename(r) or '') if r is not None else ''\n    fr = int(g\['baked_first'].value())\n    m = re.search('(#+)|%(0?\[0-9]*)d', p)\n    if m is not None:\n        width = len(m.group(1)) if m.group(1) else int(m.group(2) or 1)\n        p = p\[:m.start()] + str(fr).zfill(width) + p\[m.end():]\n    ok = bool(g\['baked_hash'].value()) and g\['baked_hash'].value() == h and os.path.exists(p)\n    if bool(g\['bake_valid'].value()) != ok:\n        g\['bake_valid'].setValue(ok)\n    text = ('baked' if ok else 'bake out of date: live') if g\['use_baked'].value() and g\['baked_hash'].value() else ''\n    if g\['label'].value() in ('', 'baked', 'bake out of date: live') and g\['label'].value() != text:\n        g\['label'].setValue(text)\n"
+ knobChanged "if nuke.thisKnob().name() in \['position_layer', 'scene_scale', 'sun_from', 'sun_direction', 'cloud_height', 'cloud_density', 'shadow_strength', 'gap_contrast', 'gap_threshold', 'outside_frame', 'penumbra', 'samples', 'drift_x', 'drift_z', 'drift_frame', 'shaft_density', 'haze_height', 'shaft_start', 'max_distance', 'sky_distance', 'march_steps', 'color_from', 'shaft_color', 'shaft_intensity', 'soften', 'edge_aware', 'render_resolution', 'shafts_resolution', 'use_baked', 'bake_file', 'bake_folder', 'baked_hash', 'baked_first', 'inputChange']:\n    g = nuke.thisNode()\n    if g.knob('bake_valid') is not None:\n        import hashlib\n        s = \[]\n        for k in \['position_layer', 'scene_scale', 'sun_from', 'sun_direction', 'cloud_height', 'cloud_density', 'shadow_strength', 'gap_contrast', 'gap_threshold', 'outside_frame', 'penumbra', 'samples', 'drift_x', 'drift_z', 'drift_frame', 'shaft_density', 'haze_height', 'shaft_start', 'max_distance', 'sky_distance', 'march_steps', 'color_from', 'shaft_color', 'shaft_intensity', 'soften', 'edge_aware', 'render_resolution', 'shafts_resolution']:\n            if g.knob(k):\n                s.append((k, g\[k].toScript()))\n        # Where the camera and sun are now, read as values since those knobs are expressions.\n        s.append(repr(g\['sun_in_use'].value()))\n        s.append(repr(g\['cam_world_matrix'].value()))\n        h = hashlib.md5(repr(s).encode()).hexdigest()\n        import os, re\n        r = g.node('BakeRead')\n        p = (nuke.filename(r) or '') if r is not None else ''\n        fr = int(g\['baked_first'].value())\n        m = re.search('(#+)|%(0?\[0-9]*)d', p)\n        if m is not None:\n            width = len(m.group(1)) if m.group(1) else int(m.group(2) or 1)\n            p = p\[:m.start()] + str(fr).zfill(width) + p\[m.end():]\n        ok = bool(g\['baked_hash'].value()) and g\['baked_hash'].value() == h and os.path.exists(p)\n        if bool(g\['bake_valid'].value()) != ok:\n            g\['bake_valid'].setValue(ok)\n        text = ('baked' if ok else 'bake out of date: live') if g\['use_baked'].value() and g\['baked_hash'].value() else ''\n        if g\['label'].value() in ('', 'baked', 'bake out of date: live') and g\['label'].value() != text:\n            g\['label'].setValue(text)\n"
  tile_color 0xb08a4aff
  addUserKnob {20 ezcloudshafts l EzCloudShafts}
  addUserKnob {22 analyze t "Reads the cloud height from the clouds' depth (the median of the cloudy pixels), takes the units from the EzAtmosScatter in 'atmos', and reports how much of the ground the gobo reaches. Run it at a frame where the clouds are in view." T "\nimport math\nn = nuke.thisNode()\nframe = nuke.frame()\nnotes = \[]\n\n\ndef up(i, knob):\n    node = n.input(i)\n    while node is not None and not node.knob(knob):\n        node = node.input(0) if node.inputs() else None\n    return node\n\n\natmos = up(3, 'haze_density')\ncam = up(2, 'focal')\nclouds = n.input(1)\nenv = n.input(0)\nif atmos is not None and atmos.knob('scene_scale'):\n    n\['scene_scale'].setValue(atmos\['scene_scale'].value())\n    notes.append('Units to metres %g, from %s.' % (atmos\['scene_scale'].value(), atmos.name()))\nscale = n\['scene_scale'].value()\nif cam is None:\n    notes.append('No camera in the camera input: connect the shot camera.')\nif env is None:\n    notes.append('Nothing in the env input.')\nif clouds is None:\n    notes.append('Nothing in the clouds input.')\n\n# warns: (rank, text), the most important first; the top one becomes the status line.\nwarns = \[]\nif cam is None or env is None or clouds is None:\n    warns.append((0, 'An input is missing: connect env, clouds and camera.'))\n\n# Find the world position and sun light layers by their usual names.\nif env is not None:\n    layers = set()\n    for c in env.channels():\n        layers.add(c.split('.')\[0])\n    if n\['position_layer'].value() not in layers or n\['position_layer'].value() == 'rgba':\n        found = None\n        for want in ('p', 'pworld', 'p_world', 'pw', 'p_w', 'worldp', 'position', 'world_position', 'worldposition',\n                     'position_world', 'pos', 'wp'):\n            for have in sorted(layers):\n                if found is None and have.lower() == want:\n                    found = have\n        if found is not None:\n            n\['position_layer'].setValue(found)\n            notes.append('Position layer: found \"%s\".' % found)\n    if not n\['use_sun_layer'].value():\n        found = None\n        for want in ('light_sun', 'sun', 'sunlight', 'sun_light', 'rgba_sun', 'c_sun', 'lgt_sun', 'lg_sun', 'key',\n                     'key_light', 'light_key', 'rgba_key', 'lgt_key'):\n            for have in sorted(layers):\n                if found is None and have.lower() == want:\n                    found = have\n        if found is not None:\n            n\['sun_layer'].setValue(found)\n            n\['use_sun_layer'].setValue(True)\n            n\['comp_shadow'].setValue(1)\n            notes.append('Sun light layer: found \"%s\", cloud shadow set to 1.' % found)\n\nif cam is not None and clouds is not None:\n    m = \[cam\['world_matrix'].getValueAt(frame, i) for i in range(16)]\n    focal = cam\['focal'].getValueAt(frame)\n    hap = cam\['haperture'].getValueAt(frame)\n    vap = cam\['vaperture'].getValueAt(frame)\n    fmt = clouds.format()\n    efmt = env.format() if env is not None else fmt\n    ox = max(0.0, (fmt.width() - efmt.width()) / 2.0)\n    oy = max(0.0, (fmt.height() - efmt.height()) / 2.0)\n    depth = n\['clouds_depth'].value()\n    if depth not in clouds.channels():\n        notes.append('The clouds input has no %s channel: set \"clouds depth\".' % depth)\n    else:\n        heights = \[]\n        nx, ny = 64, 36\n        for j in range(ny):\n            for i in range(nx):\n                px = (i + 0.5) * fmt.width() / nx\n                py = (j + 0.5) * fmt.height() / ny\n                a = clouds.sample('rgba.alpha', px, py)\n                if a < 0.5:\n                    continue\n                z = clouds.sample(depth, px, py)\n                if z <= 0:\n                    continue\n                u = (px - ox) / (fmt.width() - 2 * ox)\n                v = (py - oy) / (fmt.height() - 2 * oy)\n                cx = (u - 0.5) * hap / focal * z\n                cy = (v - 0.5) * vap / focal * z\n                cz = -z\n                heights.append((m\[4] * cx + m\[5] * cy + m\[6] * cz + m\[7]) * scale)\n        if len(heights) < 10:\n            notes.append('Too little cloud in the clouds alpha (%d of %d samples) to measure its height.'\n                         % (len(heights), nx * ny))\n        else:\n            heights.sort()\n            pick = lambda f: heights\[min(len(heights) - 1, int(f * len(heights)))]\n            if pick(0.5) <= 0:\n                notes.append('The cloud measured below the ground (%.0f m): is the depth Planar Z, in scene '\n                             'units?' % pick(0.5))\n            else:\n                n\['cloud_height'].setValue(round(pick(0.5), 1))\n                notes.append('Cloud height %.0f m (base %.0f m, top %.0f m, from %d samples).'\n                             % (pick(0.5), pick(0.1), pick(0.9), len(heights)))\n\n        # How much of the ground the gobo reaches, from a grid of the env's world positions.\n        layer = n\['position_layer'].value()\n        if env is not None and layer + '.red' in env.channels():\n            sun = \[n\['sun_in_use'].getValueAt(frame, i) for i in range(3)]\n            rot = math.radians(-n\['sun_rotation_in_use'].getValueAt(frame))\n            sun = \[sun\[0] * math.cos(rot) + sun\[2] * math.sin(rot), sun\[1],\n                   -sun\[0] * math.sin(rot) + sun\[2] * math.cos(rot)]\n            norm = math.sqrt(sum(s * s for s in sun)) or 1.0\n            sun = \[s / norm for s in sun]\n            h = n\['cloud_height'].value()\n            cam_pos = \[m\[3] * scale, m\[7] * scale, m\[11] * scale]\n            cz_ok = True\n            ground = covered = 0\n            bounds = clouds.bbox()\n            short = \{'left': 0.0, 'right': 0.0, 'top': 0.0, 'bottom': 0.0\}\n            dists = \[]\n            for j in range(36):\n                for i in range(64):\n                    px = (i + 0.5) * efmt.width() / 64\n                    py = (j + 0.5) * efmt.height() / 36\n                    p = \[env.sample(layer + '.' + c, px, py) * scale\n                         for c in ('red', 'green', 'blue')]\n                    if p == \[0.0, 0.0, 0.0]:\n                        continue\n                    dists.append(math.sqrt((p\[0] - cam_pos\[0]) ** 2 + (p\[1] - cam_pos\[1]) ** 2 +\n                                           (p\[2] - cam_pos\[2]) ** 2))\n                    if p\[1] >= h:\n                        continue\n                    ground += 1\n                    if sun\[1] <= 0.01:\n                        continue\n                    t = (h - p\[1]) / sun\[1]\n                    d = \[p\[k] + sun\[k] * t - cam_pos\[k] for k in range(3)]\n                    cx = m\[0] * d\[0] + m\[4] * d\[1] + m\[8] * d\[2]\n                    cy = m\[1] * d\[0] + m\[5] * d\[1] + m\[9] * d\[2]\n                    cz = m\[2] * d\[0] + m\[6] * d\[1] + m\[10] * d\[2]\n                    if cz > -1e-3:\n                        cz_ok = False\n                        continue\n                    x = ox + (0.5 + cx / -cz * focal / hap) * (fmt.width() - 2 * ox)\n                    y = oy + (0.5 + cy / -cz * focal / vap) * (fmt.height() - 2 * oy)\n                    if bounds.x() <= x < bounds.x() + bounds.w() and bounds.y() <= y < bounds.y() + bounds.h():\n                        covered += 1\n                    else:\n                        short\['left'] = max(short\['left'], bounds.x() - x)\n                        short\['right'] = max(short\['right'], x - bounds.x() - bounds.w())\n                        short\['bottom'] = max(short\['bottom'], bounds.y() - y)\n                        short\['top'] = max(short\['top'], y - bounds.y() - bounds.h())\n            if ground:\n                share = 100.0 * covered / ground\n                notes.append('The gobo reaches %.0f%% of the ground; the rest uses \"outside frame\" (%s).'\n                             % (share, n\['outside_frame'].value()))\n                if share < 90:\n                    need = \[]\n                    for side in ('top', 'left', 'right', 'bottom'):\n                        if short\[side] > 0:\n                            need.append('%s %d px' % (side, short\[side]))\n                    text = 'Gobo reaches only %.0f%% of the ground.' % share\n                    if need and cz_ok:\n                        text += ' Ask CG for more overscan: ' + ', '.join(need) + '.'\n                    else:\n                        text += ' The sun rays land behind the camera, so overscan will not help.'\n                    warns.append((3, text))\n\n            # A first result that shows: haze from how far the scene reaches.\n            if dists:\n                dists.sort()\n                near_km = dists\[len(dists) // 2] / 1000.0\n                far_km = dists\[min(len(dists) - 1, int(len(dists) * 0.99))] / 1000.0\n                n\['scene_depth'].setValue(round(near_km, 3))\n                density = min(2.0, max(0.005, 0.6 / max(near_km, 0.05)))\n                reach = round(max(far_km * 1.2, 1.0), 1)\n                if abs(n\['shaft_density'].value() - 0.1) < 1e-6 and n\['max_distance'].value() == 0:\n                    n\['shaft_density'].setValue(round(density, 3))\n                    n\['max_distance'].setValue(reach)\n                    n\['sky_distance'].setValue(reach)\n                    notes.append('Scene reaches %.1f km (median %.1f km): haze density %.3f /km, max and sky distance '\n                                 '%.1f km.' % (far_km, near_km, density, reach))\n                else:\n                    notes.append('Scene reaches %.1f km (median %.1f km). Haze density around %.3f /km would suit it '\n                                 '(left as it is, since you have set it).' % (far_km, near_km, density))\n                if near_km > 500 or far_km < 0.002:\n                    warns.append((1, 'Units look wrong: the scene is %.3g km deep. Check \"units to metres\".' % near_km))\n        else:\n            notes.append('The env input has no \"%s\" layer: set \"position layer\" to its world position.' % layer)\n\nif cam is not None:\n    m = \[cam\['world_matrix'].getValueAt(frame, i) for i in range(16)]\n    sun = \[n\['sun_in_use'].getValueAt(frame, i) for i in range(3)]\n    rot = math.radians(-n\['sun_rotation_in_use'].getValueAt(frame))\n    sun = \[sun\[0] * math.cos(rot) + sun\[2] * math.sin(rot), sun\[1],\n           -sun\[0] * math.sin(rot) + sun\[2] * math.cos(rot)]\n    norm = math.sqrt(sun\[0] ** 2 + sun\[1] ** 2 + sun\[2] ** 2) or 1.0\n    sun = \[v / norm for v in sun]\n    elev = math.degrees(math.asin(max(-1.0, min(1.0, sun\[1]))))\n    fwd = \[-m\[2], -m\[6], -m\[10]]\n    az = (math.degrees(math.atan2(sun\[0], -sun\[2]) - math.atan2(fwd\[0], -fwd\[2])) + 180.0) % 360.0 - 180.0\n    notes.append('Sun %.0f deg up, %.0f deg %s of where the camera looks.' % (elev, abs(az), 'right' if az > 0 else 'left'))\n    if elev <= 0:\n        warns.append((1, 'The sun is below the horizon (%.0f deg): no beams can form.' % elev))\n    elif abs(az) > 120:\n        warns.append((2, 'The sun is behind the camera (%.0f deg off): beams run away from the lens and the gobo '\n                         'cannot reach. A sun-view clouds render would fix it.' % abs(az)))\n    elif abs(az) > 60:\n        warns.append((2, 'The sun is to the side (%.0f deg off): beams will be faint and the gobo only covers '\n                         'part of the frame.' % abs(az)))\n    elif elev > 55:\n        warns.append((2, 'The sun is high (%.0f deg): beams fall almost straight down and will not fan out.' % elev))\n    height = n\['cloud_height'].value()\n    cam_m = m\[7] * n\['scene_scale'].value()\n    if abs(cam_m) > 20000:\n        warns.append((1, 'Units look wrong: the camera is %.0f km up. Check \"units to metres\".' % (cam_m / 1000.0)))\n    if height <= cam_m:\n        warns.append((1, 'Cloud height (%.0f m) is at or below the camera (%.0f m): nothing can cast from there.'\n                         % (height, cam_m)))\n    elif height > 15000:\n        warns.append((1, 'Cloud height %.0f m is implausibly high. It is in metres whatever the scene units are.' % height))\n\nwarns.sort()\nstatus = warns\[0]\[1] if warns else 'OK: the sun, units and gobo all look right.'\nn\['status'].setValue(status)\nif warns:\n    notes.append('')\n    for rank, text in warns:\n        notes.append('Warning: ' + text)\nnuke.message('EzCloudShafts analyze\\n\\n' + '\\n'.join(notes))\n" +STARTLINE}
@@ -96,6 +98,21 @@ Gizmo {
  comp_haze_lit 1.5
  addUserKnob {7 comp_shafts l "shafts" t "How much of shafts.rgb is added on top." R 0 2}
  comp_shafts 1
+ addUserKnob {26 bake_divider l Bake}
+ addUserKnob {2 bake_folder l "bake folder" t "Where bakes go, for example on the job so the farm can read them. Each script and node gets its own subfolder. $VAR and \[getenv VAR] work. Empty: an ezcloudshafts_cache folder beside the script."}
+ bake_folder "\[getenv NUKE_TEMP_DIR]/ezCloudShafts"
+ addUserKnob {2 bake_file l "bake file" t "Leave empty to use 'bake folder'. A full file path with #### overrides it for this node."}
+ addUserKnob {3 bake_first l "bake range" t "First frame to bake."}
+ addUserKnob {3 bake_last l "" t "Last frame to bake." -STARTLINE}
+ addUserKnob {22 bake_now l "bake now" t "Writes the shafts, shafts_lit and cloudshadow layers to the bake file here and now." T "g = nuke.thisNode()\nimport os\npath = nuke.filename(g.node('BakeRead')) or ''\nbad = '' if path and os.path.isabs(path) else ('the bake folder uses an environment variable that '\n    'is not set in Nuke' if path == '' else 'the bake path is not a full path: ' + path)\nif not bad and not path.lower().endswith('.exr'):\n    bad = 'bake file is a folder, not a file name like name.####.exr'\nif not bad and not os.path.isdir(os.path.dirname(path)):\n    try:\n        os.makedirs(os.path.dirname(path))\n    except OSError as e:\n        bad = 'cannot create ' + os.path.dirname(path) + ' (' + str(e.strerror or e) + ')'\nif bad:\n    nuke.message('Not baked: ' + bad + '.')\nif not bad:\n    import hashlib\n    s = \[]\n    for k in \['position_layer', 'scene_scale', 'sun_from', 'sun_direction', 'cloud_height', 'cloud_density', 'shadow_strength', 'gap_contrast', 'gap_threshold', 'outside_frame', 'penumbra', 'samples', 'drift_x', 'drift_z', 'drift_frame', 'shaft_density', 'haze_height', 'shaft_start', 'max_distance', 'sky_distance', 'march_steps', 'color_from', 'shaft_color', 'shaft_intensity', 'soften', 'edge_aware', 'render_resolution', 'shafts_resolution']:\n        if g.knob(k):\n            s.append((k, g\[k].toScript()))\n    # Where the camera and sun are now, read as values since those knobs are expressions.\n    s.append(repr(g\['sun_in_use'].value()))\n    s.append(repr(g\['cam_world_matrix'].value()))\n    h = hashlib.md5(repr(s).encode()).hexdigest()\n    first, last = int(g\['bake_first'].value()), int(g\['bake_last'].value())\n    if last < first:\n        first, last = last, first\n    use = g\['use_baked'].value()\n    g\['use_baked'].setValue(False)\n    try:\n        with g:\n            nuke.execute(nuke.toNode('BakeWrite'), first, last)\n        g\['baked_hash'].setValue(h)\n        g\['baked_first'].setValue(first)\n        g\['baked_last'].setValue(last)\n    finally:\n        g\['use_baked'].setValue(use)\n    g = nuke.thisNode()\n    if g.knob('bake_valid') is not None:\n        import hashlib\n        s = \[]\n        for k in \['position_layer', 'scene_scale', 'sun_from', 'sun_direction', 'cloud_height', 'cloud_density', 'shadow_strength', 'gap_contrast', 'gap_threshold', 'outside_frame', 'penumbra', 'samples', 'drift_x', 'drift_z', 'drift_frame', 'shaft_density', 'haze_height', 'shaft_start', 'max_distance', 'sky_distance', 'march_steps', 'color_from', 'shaft_color', 'shaft_intensity', 'soften', 'edge_aware', 'render_resolution', 'shafts_resolution']:\n            if g.knob(k):\n                s.append((k, g\[k].toScript()))\n        # Where the camera and sun are now, read as values since those knobs are expressions.\n        s.append(repr(g\['sun_in_use'].value()))\n        s.append(repr(g\['cam_world_matrix'].value()))\n        h = hashlib.md5(repr(s).encode()).hexdigest()\n        import os, re\n        r = g.node('BakeRead')\n        p = (nuke.filename(r) or '') if r is not None else ''\n        fr = int(g\['baked_first'].value())\n        m = re.search('(#+)|%(0?\[0-9]*)d', p)\n        if m is not None:\n            width = len(m.group(1)) if m.group(1) else int(m.group(2) or 1)\n            p = p\[:m.start()] + str(fr).zfill(width) + p\[m.end():]\n        ok = bool(g\['baked_hash'].value()) and g\['baked_hash'].value() == h and os.path.exists(p)\n        if bool(g\['bake_valid'].value()) != ok:\n            g\['bake_valid'].setValue(ok)\n        text = ('baked' if ok else 'bake out of date: live') if g\['use_baked'].value() and g\['baked_hash'].value() else ''\n        if g\['label'].value() in ('', 'baked', 'bake out of date: live') and g\['label'].value() != text:\n            g\['label'].setValue(text)\n" +STARTLINE}
+ addUserKnob {22 bake_farm_write l "make farm bake Write" t "Adds a Write below this node with the bake path, to render on the farm before the comp." T "g = nuke.thisNode()\nimport os\npath = nuke.filename(g.node('BakeRead')) or ''\nbad = '' if path and os.path.isabs(path) else ('the bake folder uses an environment variable that '\n    'is not set in Nuke' if path == '' else 'the bake path is not a full path: ' + path)\nif not bad and not path.lower().endswith('.exr'):\n    bad = 'bake file is a folder, not a file name like name.####.exr'\nif not bad and not os.path.isdir(os.path.dirname(path)):\n    try:\n        os.makedirs(os.path.dirname(path))\n    except OSError as e:\n        bad = 'cannot create ' + os.path.dirname(path) + ' (' + str(e.strerror or e) + ')'\nif bad:\n    nuke.message('Not baked: ' + bad + '.')\nif not bad:\n    import hashlib\n    s = \[]\n    for k in \['position_layer', 'scene_scale', 'sun_from', 'sun_direction', 'cloud_height', 'cloud_density', 'shadow_strength', 'gap_contrast', 'gap_threshold', 'outside_frame', 'penumbra', 'samples', 'drift_x', 'drift_z', 'drift_frame', 'shaft_density', 'haze_height', 'shaft_start', 'max_distance', 'sky_distance', 'march_steps', 'color_from', 'shaft_color', 'shaft_intensity', 'soften', 'edge_aware', 'render_resolution', 'shafts_resolution']:\n        if g.knob(k):\n            s.append((k, g\[k].toScript()))\n    # Where the camera and sun are now, read as values since those knobs are expressions.\n    s.append(repr(g\['sun_in_use'].value()))\n    s.append(repr(g\['cam_world_matrix'].value()))\n    h = hashlib.md5(repr(s).encode()).hexdigest()\n    first, last = int(g\['bake_first'].value()), int(g\['bake_last'].value())\n    if last < first:\n        first, last = last, first\n    with (g.parent() or nuke.root()):\n        w = nuke.nodes.Write(name=g.name() + '_BakeWrite', file=path, file_type='exr', channels='all')\n        w\['create_directories'].setValue(True)\n        w\['use_limit'].setValue(True)\n        w\['first'].setValue(first)\n        w\['last'].setValue(last)\n        w.setInput(0, g)\n        w.setXYpos(g.xpos(), g.ypos() + 80)\n    g\['baked_hash'].setValue(h)\n    g\['baked_first'].setValue(first)\n    g\['baked_last'].setValue(last)\n    g\['bake_valid'].setValue(True)\n    if nuke.GUI:\n        nuke.message('Render %s on the farm before the comp. It writes ' % w.name() + path)\n" -STARTLINE}
+ addUserKnob {6 use_baked l "use baked" t "Read the bake instead of computing, but only while it exists and the settings still match it. Otherwise the node computes live and its label says the bake is out of date. The check runs when a knob or input of this node changes and when the script opens; after changing the camera or clouds upstream, bake again." +STARTLINE}
+ use_baked true
+ addUserKnob {1 baked_hash +INVISIBLE}
+ addUserKnob {3 baked_first +INVISIBLE}
+ addUserKnob {3 baked_last +INVISIBLE}
+ addUserKnob {6 bake_valid -STARTLINE +INVISIBLE}
+ addUserKnob {22 bake_check +INVISIBLE T "g = nuke.thisNode()\nif g.knob('bake_valid') is not None:\n    import hashlib\n    s = \[]\n    for k in \['position_layer', 'scene_scale', 'sun_from', 'sun_direction', 'cloud_height', 'cloud_density', 'shadow_strength', 'gap_contrast', 'gap_threshold', 'outside_frame', 'penumbra', 'samples', 'drift_x', 'drift_z', 'drift_frame', 'shaft_density', 'haze_height', 'shaft_start', 'max_distance', 'sky_distance', 'march_steps', 'color_from', 'shaft_color', 'shaft_intensity', 'soften', 'edge_aware', 'render_resolution', 'shafts_resolution']:\n        if g.knob(k):\n            s.append((k, g\[k].toScript()))\n    # Where the camera and sun are now, read as values since those knobs are expressions.\n    s.append(repr(g\['sun_in_use'].value()))\n    s.append(repr(g\['cam_world_matrix'].value()))\n    h = hashlib.md5(repr(s).encode()).hexdigest()\n    import os, re\n    r = g.node('BakeRead')\n    p = (nuke.filename(r) or '') if r is not None else ''\n    fr = int(g\['baked_first'].value())\n    m = re.search('(#+)|%(0?\[0-9]*)d', p)\n    if m is not None:\n        width = len(m.group(1)) if m.group(1) else int(m.group(2) or 1)\n        p = p\[:m.start()] + str(fr).zfill(width) + p\[m.end():]\n    ok = bool(g\['baked_hash'].value()) and g\['baked_hash'].value() == h and os.path.exists(p)\n    if bool(g\['bake_valid'].value()) != ok:\n        g\['bake_valid'].setValue(ok)\n    text = ('baked' if ok else 'bake out of date: live') if g\['use_baked'].value() and g\['baked_hash'].value() else ''\n    if g\['label'].value() in ('', 'baked', 'bake out of date: live') and g\['label'].value() != text:\n        g\['label'].setValue(text)\n"}
  addUserKnob {26 version_divider l "" +STARTLINE}
  addUserKnob {26 version T "EzCloudShafts v1.0.0"}
  addUserKnob {78 cam_world_matrix l "camera matrix" +INVISIBLE n 16}
@@ -133,7 +150,7 @@ Gizmo {
   ypos -60
   bdwidth 1240
   bdheight 238
-  z_order 2
+  z_order 3
  }
  BackdropNode {
   inputs 0
@@ -145,7 +162,7 @@ Gizmo {
   ypos 237
   bdwidth 340
   bdheight 229
-  z_order 4
+  z_order 5
  }
  BackdropNode {
   inputs 0
@@ -157,7 +174,7 @@ Gizmo {
   ypos 525
   bdwidth 340
   bdheight 169
-  z_order 5
+  z_order 6
  }
  BackdropNode {
   inputs 0
@@ -169,7 +186,19 @@ Gizmo {
   ypos 753
   bdwidth 880
   bdheight 469
-  z_order 1
+  z_order 2
+ }
+ BackdropNode {
+  inputs 0
+  name Backdrop_Bake
+  tile_color 0x444444ff
+  label "Bake"
+  note_font_size 32
+  xpos 140
+  ypos 1281
+  bdwidth 1240
+  bdheight 499
+  z_order 0
  }
  BackdropNode {
   inputs 0
@@ -178,10 +207,10 @@ Gizmo {
   label "AOV layers"
   note_font_size 32
   xpos -40
-  ypos 1272
+  ypos 1830
   bdwidth 160
   bdheight 238
-  z_order 7
+  z_order 8
  }
  BackdropNode {
   inputs 0
@@ -190,10 +219,10 @@ Gizmo {
   label "Comp"
   note_font_size 32
   xpos 140
-  ypos 1569
+  ypos 2127
   bdwidth 700
   bdheight 619
-  z_order 0
+  z_order 1
  }
  BackdropNode {
   inputs 0
@@ -202,10 +231,10 @@ Gizmo {
   label "Views"
   note_font_size 32
   xpos 140
-  ypos 2247
+  ypos 2805
   bdwidth 520
   bdheight 229
-  z_order 3
+  z_order 4
  }
  BackdropNode {
   inputs 0
@@ -214,10 +243,10 @@ Gizmo {
   label "View output"
   note_font_size 32
   xpos 140
-  ypos 2535
+  ypos 3093
   bdwidth 160
   bdheight 349
-  z_order 6
+  z_order 7
  }
  BackdropNode {
   inputs 0
@@ -226,10 +255,10 @@ Gizmo {
   label "Output"
   note_font_size 32
   xpos -40
-  ypos 2934
+  ypos 3492
   bdwidth 160
   bdheight 178
-  z_order 8
+  z_order 9
  }
  Input {
   inputs 0
@@ -314,21 +343,21 @@ push $N1a700007
 set N1a700008 [stack 0]
 push $N1a700003
  Dot {
-  name LayoutDot25
+  name LayoutDot29
   xpos 806
   ypos 3
  }
 set N1a700009 [stack 0]
 push $N1a700009
  Dot {
-  name LayoutDot26
+  name LayoutDot30
   xpos 806
   ypos 297
  }
 set N1a70000a [stack 0]
 push $N1a70000a
  Dot {
-  name LayoutDot27
+  name LayoutDot31
   xpos 394
   ypos 297
  }
@@ -365,21 +394,21 @@ push $N1a70000d
 set N1a70000e [stack 0]
 push $N1a700005
  Dot {
-  name LayoutDot9
+  name LayoutDot13
   xpos 266
   ypos 63
  }
 set N1a70000f [stack 0]
 push $N1a70000f
  Dot {
-  name LayoutDot10
+  name LayoutDot14
   xpos 266
   ypos 585
  }
 set N1a700010 [stack 0]
 push $N1a700010
  Dot {
-  name LayoutDot12
+  name LayoutDot16
   xpos 394
   ypos 585
  }
@@ -396,7 +425,7 @@ push $N1a700011
 set N1a700012 [stack 0]
 push $N1a700010
  Dot {
-  name LayoutDot11
+  name LayoutDot15
   xpos 214
   ypos 585
  }
@@ -413,63 +442,63 @@ push $N1a700013
 set N1a700014 [stack 0]
 push $N1a700014
  Dot {
-  name LayoutDot16
+  name LayoutDot20
   xpos 290
   ypos 639
  }
 set N1a700015 [stack 0]
 push $N1a700015
  Dot {
-  name LayoutDot17
+  name LayoutDot21
   xpos 290
   ypos 873
  }
 set N1a700016 [stack 0]
 push $N1a700016
  Dot {
-  name LayoutDot18
+  name LayoutDot22
   xpos 232
   ypos 873
  }
 set N1a700017 [stack 0]
 push $N1a700008
  Dot {
-  name LayoutDot20
+  name LayoutDot24
   xpos 446
   ypos 123
  }
 set N1a700018 [stack 0]
 push $N1a700018
  Dot {
-  name LayoutDot21
+  name LayoutDot25
   xpos 446
   ypos 903
  }
 set N1a700019 [stack 0]
 push $N1a700019
  Dot {
-  name LayoutDot23
+  name LayoutDot27
   xpos 196
   ypos 903
  }
 set N1a70001a [stack 0]
 push $N1a70000e
  Dot {
-  name LayoutDot28
+  name LayoutDot32
   xpos 314
   ypos 411
  }
 set N1a70001b [stack 0]
 push $N1a70001b
  Dot {
-  name LayoutDot29
+  name LayoutDot33
   xpos 314
   ypos 843
  }
 set N1a70001c [stack 0]
 push $N1a70001c
  Dot {
-  name LayoutDot30
+  name LayoutDot34
   xpos 214
   ypos 843
  }
@@ -524,35 +553,35 @@ push $N1a700017
 set N1a70001e [stack 0]
 push $N1a700012
  Dot {
-  name LayoutDot41
+  name LayoutDot49
   xpos 470
   ypos 639
  }
 set N1a70001f [stack 0]
 push $N1a70001f
  Dot {
-  name LayoutDot42
+  name LayoutDot50
   xpos 470
   ypos 933
  }
 set N1a700020 [stack 0]
 push $N1a700020
  Dot {
-  name LayoutDot43
+  name LayoutDot51
   xpos 556
   ypos 933
  }
 set N1a700021 [stack 0]
 push $N1a700019
  Dot {
-  name LayoutDot22
+  name LayoutDot26
   xpos 592
   ypos 903
  }
 set N1a700022 [stack 0]
 push $N1a70001c
  Dot {
-  name LayoutDot31
+  name LayoutDot35
   xpos 574
   ypos 843
  }
@@ -633,21 +662,21 @@ push $N1a700024
 set N1a700026 [stack 0]
 push $N1a700016
  Dot {
-  name LayoutDot19
+  name LayoutDot23
   xpos 772
   ypos 873
  }
 set N1a700027 [stack 0]
 push $N1a700022
  Dot {
-  name LayoutDot24
+  name LayoutDot28
   xpos 736
   ypos 903
  }
 set N1a700028 [stack 0]
 push $N1a700023
  Dot {
-  name LayoutDot32
+  name LayoutDot36
   xpos 754
   ypos 843
  }
@@ -724,14 +753,14 @@ push $N1a700025
 set N1a70002c [stack 0]
 push $N1a700010
  Dot {
-  name LayoutDot13
+  name LayoutDot17
   xpos 266
   ypos 813
  }
 set N1a70002d [stack 0]
 push $N1a70002d
  Dot {
-  name LayoutDot14
+  name LayoutDot18
   xpos 394
   ypos 813
  }
@@ -775,7 +804,7 @@ push $N1a70002b
 set N1a700031 [stack 0]
 push $N1a70002e
  Dot {
-  name LayoutDot15
+  name LayoutDot19
   xpos 934
   ypos 813
  }
@@ -808,21 +837,307 @@ push $N1a700031
   label "edge aware"
  }
 set N1a700034 [stack 0]
-push $N1a700030
+push $N1a700000
  Dot {
-  name LayoutDot33
-  xpos 290
-  ypos 1167
+  name LayoutDot5
+  xpos 86
+  ypos 3
  }
 set N1a700035 [stack 0]
 push $N1a700035
  Dot {
-  name LayoutDot34
-  xpos 290
-  ypos 1335
+  name LayoutDot6
+  xpos 86
+  ypos 1341
  }
 set N1a700036 [stack 0]
 push $N1a700036
+ Dot {
+  name LayoutDot7
+  xpos 1294
+  ypos 1341
+ }
+set N1a700037 [stack 0]
+push $N1a700030
+ Dot {
+  name LayoutDot37
+  xpos 266
+  ypos 1167
+ }
+set N1a700038 [stack 0]
+push $N1a700038
+ Dot {
+  name LayoutDot38
+  xpos 266
+  ypos 1371
+ }
+set N1a700039 [stack 0]
+push $N1a700039
+ Dot {
+  name LayoutDot39
+  xpos 394
+  ypos 1371
+ }
+set N1a70003a [stack 0]
+push $N1a70003a
+ Dot {
+  name LayoutDot40
+  xpos 1312
+  ypos 1371
+ }
+set N1a70003b [stack 0]
+push $N1a70003b
+push $N1a700037
+ Copy {
+  inputs 2
+  from0 rgba.red
+  to0 shafts.red
+  from1 rgba.green
+  to1 shafts.green
+  from2 rgba.blue
+  to2 shafts.blue
+  from3 rgba.alpha
+  to3 shafts.alpha
+  name Bake_Shafts
+  xpos 1260
+  ypos 1482
+ }
+set N1a70003c [stack 0]
+push $N1a700026
+ Dot {
+  name LayoutDot52
+  xpos 626
+  ypos 1047
+ }
+set N1a70003d [stack 0]
+push $N1a70003d
+ Dot {
+  name LayoutDot53
+  xpos 626
+  ypos 1401
+ }
+set N1a70003e [stack 0]
+push $N1a70003e
+ Dot {
+  name LayoutDot54
+  xpos 754
+  ypos 1401
+ }
+set N1a70003f [stack 0]
+push $N1a70003f
+ Dot {
+  name LayoutDot55
+  xpos 1166
+  ypos 1401
+ }
+set N1a700040 [stack 0]
+push $N1a700040
+ Dot {
+  name LayoutDot56
+  xpos 1166
+  ypos 1545
+ }
+set N1a700041 [stack 0]
+push $N1a700041
+push $N1a70003c
+ Copy {
+  inputs 2
+  from0 rgba.red
+  to0 cloudshadow.red
+  from1 rgba.green
+  to1 cloudshadow.green
+  from2 rgba.blue
+  to2 cloudshadow.blue
+  from3 rgba.alpha
+  to3 cloudshadow.alpha
+  name Bake_Ground
+  xpos 1260
+  ypos 1542
+ }
+set N1a700042 [stack 0]
+push $N1a700034
+ Dot {
+  name LayoutDot65
+  xpos 806
+  ypos 1167
+ }
+set N1a700043 [stack 0]
+push $N1a700043
+ Dot {
+  name LayoutDot66
+  xpos 806
+  ypos 1431
+ }
+set N1a700044 [stack 0]
+push $N1a700044
+ Dot {
+  name LayoutDot67
+  xpos 1114
+  ypos 1431
+ }
+set N1a700045 [stack 0]
+push $N1a700045
+ Dot {
+  name LayoutDot68
+  xpos 1190
+  ypos 1431
+ }
+set N1a700046 [stack 0]
+push $N1a700046
+ Dot {
+  name LayoutDot69
+  xpos 1190
+  ypos 1605
+ }
+set N1a700047 [stack 0]
+push $N1a700047
+push $N1a700042
+ Copy {
+  inputs 2
+  from0 rgba.red
+  to0 shafts_lit.red
+  from1 rgba.green
+  to1 shafts_lit.green
+  from2 rgba.blue
+  to2 shafts_lit.blue
+  from3 rgba.alpha
+  to3 shafts_lit.alpha
+  name Bake_LitShare
+  xpos 1260
+  ypos 1602
+ }
+set N1a700048 [stack 0]
+push $N1a700048
+ Remove {
+  operation keep
+  channels shafts
+  channels2 cloudshadow
+  channels3 shafts_lit
+  name BakeKeep
+  xpos 1260
+  ypos 1662
+ }
+set N1a700049 [stack 0]
+push $N1a700049
+ Write {
+  channels all
+  file "\[python -execlocal \{import os\ng = nuke.thisGroup()\nready = g.knob('bake_file') is not None and g.knob('bake_folder') is not None\ns = nuke.root().name()\nbase = os.path.splitext(os.path.basename(s))\[0]\np = g\['bake_file'].value().strip() if ready else ''\nif not p:\n    d = g\['bake_folder'].value().strip() if ready else ''\n    d = d or os.path.join(os.path.dirname(s), 'ezcloudshafts_cache')\n    p = d.rstrip('/') + '/' + base + '/' + g.name() + '/' + base + '_' + g.name() + '.####.exr'\np = os.path.expandvars(p)\nif '\[' in p:\n    try:\n        p = nuke.tcl('subst', p)\n    except RuntimeError:\n        p = ''\nret = '' if '$' in p or not ready else p.replace(chr(92), '/')\}]"
+  file_type exr
+  first_part rgba
+  create_directories true
+  name BakeWrite
+  xpos 1260
+  ypos 1722
+ }
+set N1a70004a [stack 0]
+ Read {
+  inputs 0
+  file "\[python -execlocal \{import os\ng = nuke.thisGroup()\nready = g.knob('bake_file') is not None and g.knob('bake_folder') is not None\ns = nuke.root().name()\nbase = os.path.splitext(os.path.basename(s))\[0]\np = g\['bake_file'].value().strip() if ready else ''\nif not p:\n    d = g\['bake_folder'].value().strip() if ready else ''\n    d = d or os.path.join(os.path.dirname(s), 'ezcloudshafts_cache')\n    p = d.rstrip('/') + '/' + base + '/' + g.name() + '/' + base + '_' + g.name() + '.####.exr'\np = os.path.expandvars(p)\nif '\[' in p:\n    try:\n        p = nuke.tcl('subst', p)\n    except RuntimeError:\n        p = ''\nret = '' if '$' in p or not ready else p.replace(chr(92), '/')\}]"
+  first {{parent.baked_first}}
+  last {{parent.baked_last}}
+  origfirst {{parent.baked_first}}
+  origlast {{parent.baked_last}}
+  on_error black
+  name BakeRead
+  xpos 180
+  ypos 1482
+ }
+set N1a70004b [stack 0]
+push $N1a70004b
+ Shuffle2 {
+  fromInput1 {{0} B}
+  in1 shafts
+  fromInput2 {{0} B}
+  mappings "4 shafts.red 0 0 rgba.red 0 0 shafts.green 0 1 rgba.green 0 1 shafts.blue 0 2 rgba.blue 0 2 shafts.alpha 0 3 rgba.alpha 0 3"
+  name Baked_Shafts
+  xpos 180
+  ypos 1542
+ }
+set N1a70004c [stack 0]
+push $N1a70004b
+ Dot {
+  name LayoutDot1
+  xpos 574
+  ypos 1485
+ }
+set N1a70004d [stack 0]
+push $N1a70004d
+ Shuffle2 {
+  fromInput1 {{0} B}
+  in1 cloudshadow
+  fromInput2 {{0} B}
+  mappings "4 cloudshadow.red 0 0 rgba.red 0 0 cloudshadow.green 0 1 rgba.green 0 1 cloudshadow.blue 0 2 rgba.blue 0 2 cloudshadow.alpha 0 3 rgba.alpha 0 3"
+  name Baked_Ground
+  xpos 540
+  ypos 1542
+ }
+set N1a70004e [stack 0]
+push $N1a70004d
+ Dot {
+  name LayoutDot2
+  xpos 934
+  ypos 1485
+ }
+set N1a70004f [stack 0]
+push $N1a70004f
+ Shuffle2 {
+  fromInput1 {{0} B}
+  in1 shafts_lit
+  fromInput2 {{0} B}
+  mappings "4 shafts_lit.red 0 0 rgba.red 0 0 shafts_lit.green 0 1 rgba.green 0 1 shafts_lit.blue 0 2 rgba.blue 0 2 shafts_lit.alpha 0 3 rgba.alpha 0 3"
+  name Baked_LitShare
+  xpos 900
+  ypos 1542
+ }
+set N1a700050 [stack 0]
+push $N1a70004c
+push $N1a70003a
+ Switch {
+  inputs 2
+  which {{"parent.use_baked && parent.bake_valid"}}
+  name Use_Shafts
+  xpos 360
+  ypos 1602
+  label "use baked"
+ }
+set N1a700051 [stack 0]
+push $N1a70004e
+push $N1a70003f
+ Switch {
+  inputs 2
+  which {{"parent.use_baked && parent.bake_valid"}}
+  name Use_Ground
+  xpos 720
+  ypos 1602
+  label "use baked"
+ }
+set N1a700052 [stack 0]
+push $N1a700050
+push $N1a700045
+ Switch {
+  inputs 2
+  which {{"parent.use_baked && parent.bake_valid"}}
+  name Use_LitShare
+  xpos 1080
+  ypos 1602
+  label "use baked"
+ }
+set N1a700053 [stack 0]
+push $N1a700051
+ Dot {
+  name LayoutDot41
+  xpos 446
+  ypos 1605
+ }
+set N1a700054 [stack 0]
+push $N1a700054
+ Dot {
+  name LayoutDot42
+  xpos 446
+  ypos 1893
+ }
+set N1a700055 [stack 0]
+push $N1a700055
 push $N1a700000
  Copy {
   inputs 2
@@ -836,25 +1151,25 @@ push $N1a700000
   to3 shafts.alpha
   name Layer_Shafts
   xpos 0
-  ypos 1332
+  ypos 1890
  }
-set N1a700037 [stack 0]
-push $N1a700026
+set N1a700056 [stack 0]
+push $N1a700052
  Dot {
-  name LayoutDot44
-  xpos 626
-  ypos 1047
+  name LayoutDot57
+  xpos 806
+  ypos 1605
  }
-set N1a700038 [stack 0]
-push $N1a700038
+set N1a700057 [stack 0]
+push $N1a700057
  Dot {
-  name LayoutDot45
-  xpos 626
-  ypos 1395
+  name LayoutDot58
+  xpos 806
+  ypos 1953
  }
-set N1a700039 [stack 0]
-push $N1a700039
-push $N1a700037
+set N1a700058 [stack 0]
+push $N1a700058
+push $N1a700056
  Copy {
   inputs 2
   from0 rgba.red
@@ -867,32 +1182,32 @@ push $N1a700037
   to3 cloudshadow.alpha
   name Layer_CloudShadow
   xpos 0
-  ypos 1392
+  ypos 1950
  }
-set N1a70003a [stack 0]
-push $N1a700034
+set N1a700059 [stack 0]
+push $N1a700053
  Dot {
-  name LayoutDot52
-  xpos 806
-  ypos 1167
+  name LayoutDot70
+  xpos 1166
+  ypos 1605
  }
-set N1a70003b [stack 0]
-push $N1a70003b
+set N1a70005a [stack 0]
+push $N1a70005a
  Dot {
-  name LayoutDot53
-  xpos 806
-  ypos 1434
+  name LayoutDot71
+  xpos 1166
+  ypos 1992
  }
-set N1a70003c [stack 0]
-push $N1a70003c
+set N1a70005b [stack 0]
+push $N1a70005b
  Dot {
-  name LayoutDot54
+  name LayoutDot72
   xpos 124
-  ypos 1434
+  ypos 1992
  }
-set N1a70003d [stack 0]
-push $N1a70003d
-push $N1a70003a
+set N1a70005c [stack 0]
+push $N1a70005c
+push $N1a700059
  Copy {
   inputs 2
   from0 rgba.red
@@ -905,84 +1220,84 @@ push $N1a70003a
   to3 shafts_lit.alpha
   name Layer_LitShare
   xpos 0
-  ypos 1452
+  ypos 2010
  }
-set N1a70003e [stack 0]
-push $N1a70003e
+set N1a70005d [stack 0]
+push $N1a70005d
  Dot {
-  name LayoutDot59
+  name LayoutDot77
   xpos 110
-  ypos 1455
+  ypos 2013
  }
-set N1a70003f [stack 0]
-push $N1a70003f
+set N1a70005e [stack 0]
+push $N1a70005e
  Dot {
-  name LayoutDot60
+  name LayoutDot78
   xpos 110
-  ypos 2307
+  ypos 2865
  }
-set N1a700040 [stack 0]
-push $N1a700040
+set N1a70005f [stack 0]
+push $N1a70005f
  Dot {
-  name LayoutDot61
+  name LayoutDot79
   xpos 214
-  ypos 2307
+  ypos 2865
  }
-set N1a700041 [stack 0]
-push $N1a700036
+set N1a700060 [stack 0]
+push $N1a700055
  Dot {
-  name LayoutDot35
-  xpos 290
-  ypos 1659
+  name LayoutDot43
+  xpos 446
+  ypos 2217
  }
-set N1a700042 [stack 0]
-push $N1a700042
+set N1a700061 [stack 0]
+push $N1a700061
  Dot {
-  name LayoutDot38
-  xpos 290
-  ypos 2337
+  name LayoutDot46
+  xpos 446
+  ypos 2895
  }
-set N1a700043 [stack 0]
-push $N1a700043
+set N1a700062 [stack 0]
+push $N1a700062
  Dot {
-  name LayoutDot39
+  name LayoutDot48
   xpos 232
-  ypos 2337
+  ypos 2895
  }
-set N1a700044 [stack 0]
-push $N1a700044
-push $N1a700041
+set N1a700063 [stack 0]
+push $N1a700063
+push $N1a700060
  Merge2 {
   inputs 2
   operation plus
   output rgb
   name ShaftsOver
   xpos 180
-  ypos 2418
+  ypos 2976
  }
-set N1a700045 [stack 0]
-push $N1a700039
+set N1a700064 [stack 0]
+push $N1a700058
  Dot {
-  name LayoutDot46
-  xpos 626
-  ypos 1689
+  name LayoutDot59
+  xpos 806
+  ypos 2247
  }
-set N1a700046 [stack 0]
-push $N1a700046
+set N1a700065 [stack 0]
+push $N1a700065
  Dot {
-  name LayoutDot48
-  xpos 626
-  ypos 2367
+  name LayoutDot61
+  xpos 806
+  ypos 2925
  }
-set N1a700047 [stack 0]
-push $N1a700047
+set N1a700066 [stack 0]
+push $N1a700066
  Dot {
-  name LayoutDot49
+  name LayoutDot62
   xpos 394
-  ypos 2367
+  ypos 2925
  }
-set N1a700048 [stack 0]
-push $N1a700048
+set N1a700067 [stack 0]
+push $N1a700067
  Shuffle2 {
   fromInput1 {{0} B}
   in1 rgba
@@ -990,17 +1305,17 @@ push $N1a700048
   mappings "4 rgba.alpha 0 3 rgba.red 0 0 rgba.alpha 0 3 rgba.green 0 1 rgba.alpha 0 3 rgba.blue 0 2 rgba.alpha 0 3 rgba.alpha 0 3"
   name ShadowView
   xpos 360
-  ypos 2418
+  ypos 2976
  }
-set N1a700049 [stack 0]
-push $N1a700043
+set N1a700068 [stack 0]
+push $N1a700062
  Dot {
-  name LayoutDot40
+  name LayoutDot47
   xpos 574
-  ypos 2337
+  ypos 2895
  }
-set N1a70004a [stack 0]
-push $N1a70004a
+set N1a700069 [stack 0]
+push $N1a700069
  Shuffle2 {
   fromInput1 {{0} B}
   in1 rgba
@@ -1008,38 +1323,31 @@ push $N1a70004a
   mappings "4 rgba.alpha 0 3 rgba.red 0 0 rgba.alpha 0 3 rgba.green 0 1 rgba.alpha 0 3 rgba.blue 0 2 rgba.alpha 0 3 rgba.alpha 0 3"
   name ShaftsMatteView
   xpos 540
-  ypos 2418
+  ypos 2976
  }
-set N1a70004b [stack 0]
-push $N1a700000
+set N1a70006a [stack 0]
+push $N1a700036
  Dot {
-  name LayoutDot3
+  name LayoutDot8
   xpos 86
-  ypos 3
+  ypos 2187
  }
-set N1a70004c [stack 0]
-push $N1a70004c
+set N1a70006b [stack 0]
+push $N1a70006b
  Dot {
-  name LayoutDot4
-  xpos 86
-  ypos 1629
- }
-set N1a70004d [stack 0]
-push $N1a70004d
- Dot {
-  name LayoutDot5
+  name LayoutDot9
   xpos 266
-  ypos 1629
+  ypos 2187
  }
-set N1a70004e [stack 0]
-push $N1a70004e
+set N1a70006c [stack 0]
+push $N1a70006c
  Dot {
-  name LayoutDot7
+  name LayoutDot11
   xpos 394
-  ypos 1629
+  ypos 2187
  }
-set N1a70004f [stack 0]
-push $N1a70004f
+set N1a70006d [stack 0]
+push $N1a70006d
  Shuffle2 {
   fromInput1 {{0} B}
   in1 rgba
@@ -1047,95 +1355,95 @@ push $N1a70004f
   mappings "4 rgba.red 0 0 rgba.red 0 0 rgba.green 0 1 rgba.green 0 1 rgba.blue 0 2 rgba.blue 0 2 black -1 -1 rgba.alpha 0 3"
   name SunPick
   xpos 360
-  ypos 1770
+  ypos 2328
  }
-set N1a700050 [stack 0]
-push $N1a70004f
+set N1a70006e [stack 0]
+push $N1a70006d
  Dot {
-  name LayoutDot8
+  name LayoutDot12
   xpos 574
-  ypos 1629
+  ypos 2187
  }
-set N1a700051 [stack 0]
-push $N1a700050
-push $N1a700051
+set N1a70006f [stack 0]
+push $N1a70006e
+push $N1a70006f
  Switch {
   inputs 2
   which {{parent.use_sun_layer}}
   name SunOrBeauty
   xpos 540
-  ypos 1830
+  ypos 2388
   label "sun light layer"
  }
-set N1a700052 [stack 0]
-push $N1a700046
+set N1a700070 [stack 0]
+push $N1a700065
  Dot {
-  name LayoutDot47
+  name LayoutDot60
   xpos 214
-  ypos 1689
+  ypos 2247
  }
-set N1a700053 [stack 0]
-push $N1a700053
+set N1a700071 [stack 0]
+push $N1a700071
  Expression {
   expr0 "(1-a)*parent.comp_shadow"
   expr1 "(1-a)*parent.comp_shadow"
   expr2 "(1-a)*parent.comp_shadow"
   name Comp_ShadowAmount
   xpos 180
-  ypos 1770
+  ypos 2328
  }
-set N1a700054 [stack 0]
-push $N1a700052
+set N1a700072 [stack 0]
+push $N1a700070
  Dot {
-  name LayoutDot1
+  name LayoutDot3
   xpos 226
-  ypos 1833
+  ypos 2391
  }
-set N1a700055 [stack 0]
-push $N1a700055
-push $N1a700054
+set N1a700073 [stack 0]
+push $N1a700073
+push $N1a700072
  Merge2 {
   inputs 2
   operation multiply
   output rgb
   name Comp_SunLost
   xpos 180
-  ypos 1890
+  ypos 2448
  }
-set N1a700056 [stack 0]
-push $N1a70004e
+set N1a700074 [stack 0]
+push $N1a70006c
  Dot {
-  name LayoutDot6
+  name LayoutDot10
   xpos 266
-  ypos 1953
+  ypos 2511
  }
-set N1a700057 [stack 0]
-push $N1a700056
-push $N1a700057
+set N1a700075 [stack 0]
+push $N1a700074
+push $N1a700075
  Merge2 {
   inputs 2
   operation from
   output rgb
   name Comp_Land
   xpos 360
-  ypos 1950
+  ypos 2508
  }
-set N1a700058 [stack 0]
-push $N1a70003c
+set N1a700076 [stack 0]
+push $N1a70005b
  Dot {
-  name LayoutDot55
-  xpos 806
-  ypos 1719
+  name LayoutDot73
+  xpos 1166
+  ypos 2277
  }
-set N1a700059 [stack 0]
-push $N1a700059
+set N1a700077 [stack 0]
+push $N1a700077
  Dot {
-  name LayoutDot56
+  name LayoutDot74
   xpos 754
-  ypos 1719
+  ypos 2277
  }
-set N1a70005a [stack 0]
-push $N1a70005a
+set N1a700078 [stack 0]
+push $N1a700078
  Expression {
   expr0 "pow(clamp(1-a,0,1), parent.comp_haze*parent.comp_haze_falloff.r)"
   expr1 "pow(clamp(1-a,0,1), parent.comp_haze*parent.comp_haze_falloff.g)"
@@ -1143,78 +1451,78 @@ push $N1a70005a
   expr3 r
   name Comp_Transmittance
   xpos 720
-  ypos 1770
+  ypos 2328
  }
-set N1a70005b [stack 0]
-push $N1a70005b
+set N1a700079 [stack 0]
+push $N1a700079
  Dot {
-  name LayoutDot73
+  name LayoutDot91
   xpos 830
-  ypos 1773
+  ypos 2331
  }
-set N1a70005c [stack 0]
-push $N1a70005c
+set N1a70007a [stack 0]
+push $N1a70007a
  Dot {
-  name LayoutDot74
+  name LayoutDot92
   xpos 830
-  ypos 2013
+  ypos 2571
  }
-set N1a70005d [stack 0]
-push $N1a70005d
-push $N1a700058
+set N1a70007b [stack 0]
+push $N1a70007b
+push $N1a700076
  Merge2 {
   inputs 2
   operation multiply
   output rgb
   name Comp_LandHazed
   xpos 360
-  ypos 2010
+  ypos 2568
  }
-set N1a70005e [stack 0]
-push $N1a70005b
+set N1a70007c [stack 0]
+push $N1a700079
  Expression {
   expr0 "(1-r)*parent.comp_haze_color.r*(parent.comp_haze_shadow+(parent.comp_haze_lit-parent.comp_haze_shadow)*a)"
   expr1 "(1-g)*parent.comp_haze_color.g*(parent.comp_haze_shadow+(parent.comp_haze_lit-parent.comp_haze_shadow)*a)"
   expr2 "(1-b)*parent.comp_haze_color.b*(parent.comp_haze_shadow+(parent.comp_haze_lit-parent.comp_haze_shadow)*a)"
   name Comp_HazeLight
   xpos 720
-  ypos 1830
+  ypos 2388
  }
-set N1a70005f [stack 0]
-push $N1a70005f
+set N1a70007d [stack 0]
+push $N1a70007d
  Dot {
-  name LayoutDot2
+  name LayoutDot4
   xpos 754
-  ypos 2073
+  ypos 2631
  }
-set N1a700060 [stack 0]
-push $N1a700060
-push $N1a70005e
+set N1a70007e [stack 0]
+push $N1a70007e
+push $N1a70007c
  Merge2 {
   inputs 2
   operation plus
   output rgb
   name Comp_PlusHaze
   xpos 360
-  ypos 2070
+  ypos 2628
  }
-set N1a700061 [stack 0]
-push $N1a700042
- Dot {
-  name LayoutDot36
-  xpos 314
-  ypos 1659
- }
-set N1a700062 [stack 0]
-push $N1a700062
- Dot {
-  name LayoutDot37
-  xpos 314
-  ypos 2133
- }
-set N1a700063 [stack 0]
-push $N1a700063
+set N1a70007f [stack 0]
 push $N1a700061
+ Dot {
+  name LayoutDot44
+  xpos 470
+  ypos 2217
+ }
+set N1a700080 [stack 0]
+push $N1a700080
+ Dot {
+  name LayoutDot45
+  xpos 470
+  ypos 2679
+ }
+set N1a700081 [stack 0]
+push $N1a700081
+push $N1a70007f
  Merge2 {
   inputs 2
   operation plus
@@ -1222,180 +1530,180 @@ push $N1a700061
   mix {{parent.comp_shafts}}
   name Comp_PlusShafts
   xpos 360
-  ypos 2130
+  ypos 2688
  }
-set N1a700064 [stack 0]
-push $N1a700040
+set N1a700082 [stack 0]
+push $N1a70005f
  Dot {
-  name LayoutDot62
+  name LayoutDot80
   xpos 110
-  ypos 2595
+  ypos 3153
  }
-set N1a700065 [stack 0]
-push $N1a700065
+set N1a700083 [stack 0]
+push $N1a700083
  Dot {
-  name LayoutDot63
+  name LayoutDot81
   xpos 214
-  ypos 2595
+  ypos 3153
  }
-set N1a700066 [stack 0]
-push $N1a700045
- Dot {
-  name LayoutDot64
-  xpos 266
-  ypos 2421
- }
-set N1a700067 [stack 0]
-push $N1a700067
- Dot {
-  name LayoutDot65
-  xpos 266
-  ypos 2625
- }
-set N1a700068 [stack 0]
-push $N1a700068
- Dot {
-  name LayoutDot66
-  xpos 232
-  ypos 2625
- }
-set N1a700069 [stack 0]
-push $N1a700049
- Dot {
-  name LayoutDot67
-  xpos 446
-  ypos 2421
- }
-set N1a70006a [stack 0]
-push $N1a70006a
- Dot {
-  name LayoutDot68
-  xpos 446
-  ypos 2685
- }
-set N1a70006b [stack 0]
-push $N1a70006b
- Dot {
-  name LayoutDot69
-  xpos 250
-  ypos 2685
- }
-set N1a70006c [stack 0]
-push $N1a700047
- Dot {
-  name LayoutDot50
-  xpos 626
-  ypos 2715
- }
-set N1a70006d [stack 0]
-push $N1a70006d
- Dot {
-  name LayoutDot51
-  xpos 178
-  ypos 2715
- }
-set N1a70006e [stack 0]
-push $N1a70004b
- Dot {
-  name LayoutDot70
-  xpos 650
-  ypos 2421
- }
-set N1a70006f [stack 0]
-push $N1a70006f
- Dot {
-  name LayoutDot71
-  xpos 650
-  ypos 2745
- }
-set N1a700070 [stack 0]
-push $N1a700070
- Dot {
-  name LayoutDot72
-  xpos 268
-  ypos 2745
- }
-set N1a700071 [stack 0]
-push $N1a700059
- Dot {
-  name LayoutDot57
-  xpos 806
-  ypos 2775
- }
-set N1a700072 [stack 0]
-push $N1a700072
- Dot {
-  name LayoutDot58
-  xpos 160
-  ypos 2775
- }
-set N1a700073 [stack 0]
+set N1a700084 [stack 0]
 push $N1a700064
  Dot {
-  name LayoutDot75
-  xpos 470
-  ypos 2133
+  name LayoutDot82
+  xpos 266
+  ypos 2979
  }
-set N1a700074 [stack 0]
-push $N1a700074
+set N1a700085 [stack 0]
+push $N1a700085
+ Dot {
+  name LayoutDot83
+  xpos 266
+  ypos 3183
+ }
+set N1a700086 [stack 0]
+push $N1a700086
+ Dot {
+  name LayoutDot84
+  xpos 232
+  ypos 3183
+ }
+set N1a700087 [stack 0]
+push $N1a700068
+ Dot {
+  name LayoutDot85
+  xpos 446
+  ypos 2979
+ }
+set N1a700088 [stack 0]
+push $N1a700088
+ Dot {
+  name LayoutDot86
+  xpos 446
+  ypos 3243
+ }
+set N1a700089 [stack 0]
+push $N1a700089
+ Dot {
+  name LayoutDot87
+  xpos 250
+  ypos 3243
+ }
+set N1a70008a [stack 0]
+push $N1a700066
+ Dot {
+  name LayoutDot63
+  xpos 806
+  ypos 3303
+ }
+set N1a70008b [stack 0]
+push $N1a70008b
+ Dot {
+  name LayoutDot64
+  xpos 268
+  ypos 3303
+ }
+set N1a70008c [stack 0]
+push $N1a70006a
+ Dot {
+  name LayoutDot88
+  xpos 626
+  ypos 2979
+ }
+set N1a70008d [stack 0]
+push $N1a70008d
+ Dot {
+  name LayoutDot89
+  xpos 626
+  ypos 3273
+ }
+set N1a70008e [stack 0]
+push $N1a70008e
+ Dot {
+  name LayoutDot90
+  xpos 178
+  ypos 3273
+ }
+set N1a70008f [stack 0]
+push $N1a700077
+ Dot {
+  name LayoutDot75
+  xpos 1166
+  ypos 3333
+ }
+set N1a700090 [stack 0]
+push $N1a700090
  Dot {
   name LayoutDot76
-  xpos 470
-  ypos 2655
+  xpos 160
+  ypos 3333
  }
-set N1a700075 [stack 0]
-push $N1a700075
+set N1a700091 [stack 0]
+push $N1a700082
  Dot {
-  name LayoutDot77
-  xpos 196
-  ypos 2655
+  name LayoutDot93
+  xpos 494
+  ypos 2691
  }
-set N1a700076 [stack 0]
-push $N1a700076
-push $N1a700073
-push $N1a700071
-push $N1a70006e
-push $N1a70006c
-push $N1a700069
-push $N1a700066
+set N1a700092 [stack 0]
+push $N1a700092
+ Dot {
+  name LayoutDot94
+  xpos 494
+  ypos 3213
+ }
+set N1a700093 [stack 0]
+push $N1a700093
+ Dot {
+  name LayoutDot95
+  xpos 196
+  ypos 3213
+ }
+set N1a700094 [stack 0]
+push $N1a700094
+push $N1a700091
+push $N1a70008f
+push $N1a70008c
+push $N1a70008a
+push $N1a700087
+push $N1a700084
  Switch {
   inputs 7
   which {{parent.view}}
   name ViewOutput
   xpos 180
-  ypos 2826
+  ypos 3384
   label "view"
  }
-set N1a700077 [stack 0]
-push $N1a700077
+set N1a700095 [stack 0]
+push $N1a700095
  Dot {
-  name LayoutDot78
+  name LayoutDot96
   xpos 266
-  ypos 2829
+  ypos 3387
  }
-set N1a700078 [stack 0]
-push $N1a700078
+set N1a700096 [stack 0]
+push $N1a700096
  Dot {
-  name LayoutDot79
+  name LayoutDot97
   xpos 266
-  ypos 2997
+  ypos 3555
  }
-set N1a700079 [stack 0]
-push $N1a700079
-push $N1a70003e
+set N1a700097 [stack 0]
+push $N1a700097
+push $N1a70005d
  Copy {
   inputs 2
   channels rgb
   name MainRGB
   xpos 0
-  ypos 2994
+  ypos 3552
  }
-set N1a70007a [stack 0]
-push $N1a70007a
+set N1a700098 [stack 0]
+push $N1a700098
  Output {
   name Output1
   xpos 0
-  ypos 3054
+  ypos 3612
  }
-set N1a70007b [stack 0]
+set N1a700099 [stack 0]
 end_group

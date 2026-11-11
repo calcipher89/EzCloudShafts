@@ -46,6 +46,12 @@ rgba is the env render, or whatever **view** picks. Two layers are added:
 
 **soften (px)** blurs the shafts and shafts_lit layers to take out the sampling grain of long rays. With **edge aware** on (the default), pixels only average with neighbours at about the same distance from the camera, so beams do not bleed across ridge lines.
 
+## Bake
+
+**bake now** writes the shafts, shafts_lit and cloudshadow layers to EXRs for the **bake range**, and **use baked** reads them back instead of computing, so the node is cheap in the comp. **make farm bake Write** adds a Write for a farm job instead. Set **bake folder** to somewhere on the job, for example `/data/jobs/[getenv JOB]/sequences/[getenv SEQ]/shots/[getenv SHOT]/nuke/comp/ezCloudShafts/cache`; each script and node gets its own subfolder.
+
+If a setting changes after the bake, the node computes live and its label says the bake is out of date. The Comp knobs aren't baked, so they stay live. After changing the camera or clouds upstream, bake again.
+
 ## Speed
 
 The passes run at a reduced size and are scaled back up to the env's format.
