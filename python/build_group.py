@@ -33,7 +33,7 @@ KERNEL = "EzCloudShafts"
 # came from. After editing the kernel: load the .blink in a BlinkScript in NukeX, recompile,
 # take the 5th word of its KernelDescription, and update both of these.
 KERNEL_SOURCE_SHA256 = "0b2c04f075fd13c3f3910f69da508a71a7a1c978b30d5da2c1f6096f98f020c6"
-KERNEL_NUKE_HASH = "PENDING"  # to be read from NukeX for the new source
+KERNEL_NUKE_HASH = "106d569df343c1e3dbdfc68cf193a02da2cd54eeac79b6c3058db7d2fb0f43da"
 GROUP_PATH = os.path.join(ROOT, "groups", "EzCloudShafts_group.nk")
 GIZMO_PATH = os.path.join(ROOT, "gizmos", "EzCloudShafts.gizmo")
 
