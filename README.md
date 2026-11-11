@@ -32,6 +32,16 @@ rgba is the env render, or whatever **view** picks. Two layers are added:
 | `cloudshadow.a` | Sun visibility on the ground: 1 lit, 0 under cloud, with soft edges. Multiply the sun light group by it, or use it as a grade matte. |
 | `cloudshadow.rgb` | The gobo at the ground from the sun's centre, unsoftened (the **Gobo Check** view), for lining it up. |
 
+## Speed
+
+The passes run at a reduced size and are scaled back up to the env's format.
+
+- **viewer resolution** sets the size in the Nuke GUI (default Half).
+- **render resolution** sets it for terminal and farm renders (default Full).
+- **shafts at** computes the shafts smaller again (default Half), since they are soft.
+
+At 4K, the defaults make the viewer about 4 times cheaper for the ground matte and 16 times cheaper for the shafts. **steps** and **softness samples** trade grain for speed. World position is scaled down with an impulse filter, so positions are never blended across a ridge edge.
+
 ## How it works
 
 The clouds are a sheet at **cloud height**. From each ground point (or each step along a

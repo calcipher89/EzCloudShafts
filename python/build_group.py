@@ -45,6 +45,7 @@ PARAMS = [
     ("focal", "focal", "Float", 1, 35.0),
     ("haperture", "haperture", "Float", 1, 36.0),
     ("vaperture", "vaperture", "Float", 1, 20.25),
+    ("frame_size", "frameSize", "Float", 2, (1920, 1080)),
     ("scene_scale", "sceneScale", "Float", 1, 0.1),
     ("clouds_size", "cloudsSize", "Float", 2, (1920, 1080)),
     ("clouds_overscan", "cloudsOverscan", "Float", 2, (0, 0)),
@@ -56,13 +57,13 @@ PARAMS = [
     ("outside_lit", "outsideLit", "Int", 1, 1),
     ("drift", "drift", "Float", 2, (0, 0)),
     ("penumbra", "penumbra", "Float", 1, 0.5),
-    ("samples", "samples", "Int", 1, 8),
+    ("samples", "samples", "Int", 1, 6),
     ("shaft_density", "shaftDensity", "Float", 1, 0.0001),
     ("haze_height", "hazeHeight", "Float", 1, 1200.0),
     ("shaft_start", "shaftStart", "Float", 1, 0.0),
     ("max_distance", "maxDistance", "Float", 1, 0.0),
     ("sky_distance", "skyDistance", "Float", 1, 20000.0),
-    ("march_steps", "marchSteps", "Int", 1, 48),
+    ("march_steps", "marchSteps", "Int", 1, 32),
     ("use_env", "useEnv", "Int", 1, 0),
     ("env_screen", "envScreen", "Int", 1, 0),
     ("env_rotation", "envRotation", "Float", 1, 0.0),
@@ -267,6 +268,21 @@ def knob_lines():
         % q("What the main rgb shows. The passes are always written to the shafts and cloudshadow layers; "
             "Passthrough leaves rgba as the env render."))
     add('view "Shafts Over Env"')
+    add('addUserKnob {4 viewer_resolution l "viewer resolution" t %s M {Full Half Quarter}}'
+        % q("Size the passes are computed at in the Nuke GUI, then scaled back up. Half is about four times "
+            "faster than Full. Renders from a terminal or the farm use 'render resolution'."))
+    add('viewer_resolution Half')
+    add('addUserKnob {4 render_resolution l "render resolution" t %s -STARTLINE M {Full Half Quarter}}'
+        % q("Size the passes are computed at when rendering outside the GUI (terminal, farm)."))
+    add('addUserKnob {4 shafts_resolution l "shafts at" t %s -STARTLINE M {Same Half Quarter}}'
+        % q("The shafts are soft, so they can be computed smaller again than the ground matte: Half of the "
+            "viewer or render resolution is four times faster and rarely shows."))
+    add('shafts_resolution Half')
+    add('addUserKnob {7 matte_scale +INVISIBLE}')
+    add('matte_scale {{"(\\$gui ? viewer_resolution : render_resolution) == 0 ? 1 : '
+        '(\\$gui ? viewer_resolution : render_resolution) == 1 ? 0.5 : 0.25"}}')
+    add('addUserKnob {7 shafts_scale +INVISIBLE}')
+    add('shafts_scale {{"matte_scale * (shafts_resolution == 0 ? 1 : shafts_resolution == 1 ? 0.5 : 0.25)"}}')
 
     add('addUserKnob {26 inputs_divider l Inputs}')
     add('addUserKnob {41 position_layer l "position layer" t %s T PositionPick.in1}'
@@ -309,7 +325,7 @@ def knob_lines():
     add('penumbra 0.5')
     add('addUserKnob {3 samples l "softness samples" t %s}'
         % q("Sun directions averaged for the ground matte. More is smoother and slower."))
-    add('samples 8')
+    add('samples 6')
     add('addUserKnob {7 drift_x l "drift x (m/frame)" t %s R -20 20}'
         % q("Moves the cloud shadows across the ground over time, for clouds rendered still."))
     add('addUserKnob {7 drift_z l "drift z (m/frame)" t %s R -20 20}'
@@ -333,7 +349,7 @@ def knob_lines():
     add('sky_distance 20')
     add('addUserKnob {3 march_steps l steps t %s}'
         % q("Steps along each view ray. More gives cleaner beams and is slower."))
-    add('march_steps 48')
+    add('march_steps 32')
     add('addUserKnob {4 color_from l "colour from" t %s M {EzAtmosScatter Color}}'
         % q("EzAtmosScatter: the sunlit haze colour of the atmos input (atmos_haze_sun along the view), "
             "times 'shaft color'. Color: 'shaft color' alone. Without an atmos input it is Color."))
@@ -405,9 +421,10 @@ ALPHA_TO_RGB = '"4 %s"' % " ".join(
     ["rgba.alpha 0 3 rgba.alpha 0 3"])
 
 
-def blink_node(name, output, source):
+def blink_node(name, output, source, work):
     links = {
         "output": str(output),
+        "frame_size": "{%s.width} {%s.height}" % (work, work),
         "cam_row0": "{parent.cam_world_matrix.0} {parent.cam_world_matrix.1} {parent.cam_world_matrix.2}",
         "cam_row1": "{parent.cam_world_matrix.4} {parent.cam_world_matrix.5} {parent.cam_world_matrix.6}",
         "cam_row2": "{parent.cam_world_matrix.8} {parent.cam_world_matrix.9} {parent.cam_world_matrix.10}",
@@ -454,6 +471,15 @@ def blink_node(name, output, source):
     return body
 
 
+def work_reformat(scale):
+    return ["type scale", "scale {{%s} {%s}}" % (scale, scale), "filter impulse"]
+
+
+def full_reformat():
+    return ["type \"to box\"", "box_width {{PositionPick.width}}", "box_height {{PositionPick.height}}",
+            "box_fixed true", "resize distort", "filter cubic"]
+
+
 def nodes(source):
     """(name, class, [input names], [knob lines]) in creation order."""
     tiny = '"8 4 0 0 8 4 1 EzCloudShafts_tiny"'
@@ -471,22 +497,28 @@ def nodes(source):
                                                  "mappings " + shuffle_mappings("atmos_haze_sun")]),
         ("NoAtmos", "Constant", [], ["inputs 0", "format " + tiny]),
         ("AtmosOrNone", "Switch", ["NoAtmos", "AtmosSunPick"], ["inputs 2", 'which {{"\\[exists parent.input3]"}}']),
-        ("Pass_Shafts", "BlinkScript", ["PositionPick", "CloudsOrNone", "AtmosOrNone"],
-         ["inputs 3"] + blink_node("Pass_Shafts", 0, source)),
-        ("Pass_Ground", "BlinkScript", ["PositionPick", "CloudsOrNone", "AtmosOrNone"],
-         ["inputs 3"] + blink_node("Pass_Ground", 1, source)),
-        ("Layer_Shafts", "Copy", ["env", "Pass_Shafts"],
+        # The passes run on a scaled-down P (impulse, so no position is ever blended across an
+        # edge), then are scaled back up to the env's format.
+        ("WorkPosMatte", "Reformat", ["PositionPick"], work_reformat("parent.matte_scale")),
+        ("WorkPosShafts", "Reformat", ["PositionPick"], work_reformat("parent.shafts_scale")),
+        ("Pass_Shafts", "BlinkScript", ["WorkPosShafts", "CloudsOrNone", "AtmosOrNone"],
+         ["inputs 3"] + blink_node("Pass_Shafts", 0, source, "WorkPosShafts")),
+        ("Pass_Ground", "BlinkScript", ["WorkPosMatte", "CloudsOrNone", "AtmosOrNone"],
+         ["inputs 3"] + blink_node("Pass_Ground", 1, source, "WorkPosMatte")),
+        ("Full_Shafts", "Reformat", ["Pass_Shafts"], full_reformat()),
+        ("Full_Ground", "Reformat", ["Pass_Ground"], full_reformat()),
+        ("Layer_Shafts", "Copy", ["env", "Full_Shafts"],
          ["inputs 2"] + ["from%d rgba.%s\n  to%d shafts.%s" % (i, c, i, c)
                          for i, c in enumerate(("red", "green", "blue", "alpha"))]),
-        ("Layer_CloudShadow", "Copy", ["Layer_Shafts", "Pass_Ground"],
+        ("Layer_CloudShadow", "Copy", ["Layer_Shafts", "Full_Ground"],
          ["inputs 2"] + ["from%d rgba.%s\n  to%d cloudshadow.%s" % (i, c, i, c)
                          for i, c in enumerate(("red", "green", "blue", "alpha"))]),
-        ("ShaftsOver", "Merge2", ["Layer_CloudShadow", "Pass_Shafts"], ["inputs 2", "operation plus", "output rgb"]),
-        ("ShadowView", "Shuffle2", ["Pass_Ground"], ["fromInput1 {{0} B}", "in1 rgba", "fromInput2 {{0} B}",
+        ("ShaftsOver", "Merge2", ["Layer_CloudShadow", "Full_Shafts"], ["inputs 2", "operation plus", "output rgb"]),
+        ("ShadowView", "Shuffle2", ["Full_Ground"], ["fromInput1 {{0} B}", "in1 rgba", "fromInput2 {{0} B}",
                                                     "mappings " + ALPHA_TO_RGB]),
-        ("ShaftsMatteView", "Shuffle2", ["Pass_Shafts"], ["fromInput1 {{0} B}", "in1 rgba", "fromInput2 {{0} B}",
+        ("ShaftsMatteView", "Shuffle2", ["Full_Shafts"], ["fromInput1 {{0} B}", "in1 rgba", "fromInput2 {{0} B}",
                                                           "mappings " + ALPHA_TO_RGB]),
-        ("ViewOutput", "Switch", ["Layer_CloudShadow", "ShaftsOver", "ShadowView", "Pass_Ground", "ShaftsMatteView"],
+        ("ViewOutput", "Switch", ["Layer_CloudShadow", "ShaftsOver", "ShadowView", "Full_Ground", "ShaftsMatteView"],
          ["inputs 5", "which {{parent.view}}"]),
         ("MainRGB", "Copy", ["Layer_CloudShadow", "ViewOutput"], ["inputs 2", "channels rgb"]),
         ("Output1", "Output", ["MainRGB"], []),
