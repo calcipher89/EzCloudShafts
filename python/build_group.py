@@ -272,10 +272,10 @@ env = n.input(0)
 if env is None:
     nuke.message('EzCloudShafts: connect the env input first.')
 else:
-    N = n.fullName()
+    N = n.name()
     col, row = 180, 60
     x0, y0 = n.xpos() + 300, n.ypos() + 60
-    with nuke.root():
+    with (n.parent() or nuke.root()):
         for other in nuke.allNodes():
             other.setSelected(False)
         made = []
@@ -471,8 +471,9 @@ def knob_lines():
 
     add('addUserKnob {26 comp_divider l Comp}')
     add('addUserKnob {7 comp_shadow l "cloud shadow" t %s}'
-        % q("How much of the sun light the cloud shadow takes off the env: 0 none, 1 all of it."))
-    add('comp_shadow 1')
+        % q("How much of the sun light the cloud shadow takes off the env: 0 none, 1 all of it. Use 1 with a sun "
+            "light layer; without one the whole env is darkened, so keep it lower."))
+    add('comp_shadow 0.7')
     add('addUserKnob {6 use_sun_layer l "sun light layer" t %s +STARTLINE}'
         % q("On: the cloud shadow only darkens the env's sun light group, picked on the right (the beauty must be "
             "the sum of its light groups). Off: it darkens the whole env."))
