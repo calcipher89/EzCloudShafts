@@ -19,6 +19,8 @@
 // output 2, lit share: the same march; rgb = the share of the ray's haze in-scatter that is
 //   sunlit (1 all lit, 0 all under cloud), whatever the haze amount, to grade the haze up in
 //   the beams and down in the shadowed air. alpha = the haze in-scatter, lit or not (0..1).
+// output 3, view colour: rgb = `envSun` looked up along each view ray, with no march, for the
+//   atmos's sky haze colour in the camera's view.
 // output 1, ground: rgb = the gobo at the surface from the sun's centre, unsoftened (to check
 //   alignment), alpha = the softened sun visibility, 1 lit, 0 under cloud. Sky is 1.
 //
@@ -29,12 +31,19 @@
 // clouds render, alpha = opacity, in the shot camera's view (overscan in its bbox, or baked
 // into a bigger format: cloudsOverscan). `envSun` EzAtmosScatter's atmos_haze_sun, lat-long
 // (or the camera's view with envScreen). Scene units turn into metres with sceneScale.
+//
+// useDepth: the clouds' red holds their Planar Z (scene units). The height where the sun ray
+// meets the cloud is then refined from it, so tall clouds cast from their real height.
+// useSunView: `sunClouds` is the clouds' opacity from an orthographic camera looking along the
+// sun (sunRow*, sunPosition, sunWidth in scene units), and is used instead of `clouds`: it has no
+// in-frame limit. The sun ray still meets the sheet first, so softness works the same.
 
 kernel EzCloudShafts : ImageComputationKernel<ePixelWise>
 {
   Image<eRead, eAccessPoint, eEdgeClamped> pos;
   Image<eRead, eAccessRandom, eEdgeClamped> clouds;
   Image<eRead, eAccessRandom, eEdgeClamped> envSun;
+  Image<eRead, eAccessRandom, eEdgeClamped> sunClouds;
   Image<eWrite> dst;
 
 param:
@@ -71,6 +80,13 @@ param:
   float3 shaftColor;
   float shaftIntensity;
   float seed;
+  int useDepth;
+  int useSunView;
+  float3 sunRow0;
+  float3 sunRow1;
+  float3 sunRow2;
+  float3 sunPosition;
+  float sunWidth;
 
 local:
   float pi;
@@ -113,6 +129,13 @@ local:
     defineParam(shaftColor, "shaft_color", float3(1.0f, 0.9f, 0.75f));
     defineParam(shaftIntensity, "shaft_intensity", 1.0f);
     defineParam(seed, "seed", 1.0f);
+    defineParam(useDepth, "use_depth", 0);
+    defineParam(useSunView, "use_sun_view", 0);
+    defineParam(sunRow0, "sun_row0", float3(1.0f, 0.0f, 0.0f));
+    defineParam(sunRow1, "sun_row1", float3(0.0f, 1.0f, 0.0f));
+    defineParam(sunRow2, "sun_row2", float3(0.0f, 0.0f, 1.0f));
+    defineParam(sunPosition, "sun_position", float3(0.0f, 0.0f, 0.0f));
+    defineParam(sunWidth, "sun_width", 100000.0f);
   }
 
   void init()
@@ -167,27 +190,61 @@ local:
       inside = 0.0f;
       return 0.0f;
     }
-    float3 hit = p + sun * ((cloudHeight - p.y) / sun.y);
-    hit = float3(hit.x - drift.x, hit.y, hit.z - drift.y);
-    float3 d = hit - cameraOrigin();
-    // Into camera space with the transpose of the camera rotation.
-    float cx = camRow0.x * d.x + camRow1.x * d.y + camRow2.x * d.z;
-    float cy = camRow0.y * d.x + camRow1.y * d.y + camRow2.y * d.z;
-    float cz = camRow0.z * d.x + camRow1.z * d.y + camRow2.z * d.z;
-    if (cz > -1e-3f) {
-      inside = 0.0f;
-      return 0.0f;
+    float height = cloudHeight;
+    if (useSunView != 0) {
+      float3 hit = p + sun * ((height - p.y) / sun.y);
+      hit = float3(hit.x - drift.x, hit.y, hit.z - drift.y);
+      float3 d = hit - sunPosition * sceneScale;
+      float sx = sunRow0.x * d.x + sunRow1.x * d.y + sunRow2.x * d.z;
+      float sy = sunRow0.y * d.x + sunRow1.y * d.y + sunRow2.y * d.z;
+      float w = sunClouds.bounds.width();
+      float perMetre = w / (sunWidth * sceneScale);
+      float x = sunClouds.bounds.x1 + 0.5f * w + sx * perMetre;
+      float y = sunClouds.bounds.y1 + 0.5f * sunClouds.bounds.height() + sy * perMetre;
+      if (x < sunClouds.bounds.x1 || x >= sunClouds.bounds.x2 || y < sunClouds.bounds.y1 || y >= sunClouds.bounds.y2) {
+        inside = 0.0f;
+        return 0.0f;
+      }
+      return clamp(bilinear(sunClouds, x - 0.5f, y - 0.5f).w * cloudDensity, 0.0f, 1.0f);
     }
-    float u = 0.5f + (cx / -cz) * focal / haperture;
-    float v = 0.5f + (cy / -cz) * focal / vaperture;
-    // The format is the camera's frame; overscan baked into a bigger format sits around it.
-    float x = cloudsOverscan.x + u * (cloudsSize.x - 2.0f * cloudsOverscan.x);
-    float y = cloudsOverscan.y + v * (cloudsSize.y - 2.0f * cloudsOverscan.y);
-    if (x < clouds.bounds.x1 || x >= clouds.bounds.x2 || y < clouds.bounds.y1 || y >= clouds.bounds.y2) {
-      inside = 0.0f;
-      return 0.0f;
+    // With the clouds' depth, look again from the height the first lookup found.
+    int passes = useDepth != 0 ? 3 : 1;
+    float a = 0.0f;
+    for (int pass = 0; pass < passes; pass++) {
+      float3 hit = p + sun * ((height - p.y) / sun.y);
+      hit = float3(hit.x - drift.x, hit.y, hit.z - drift.y);
+      float3 d = hit - cameraOrigin();
+      // Into camera space with the transpose of the camera rotation.
+      float cx = camRow0.x * d.x + camRow1.x * d.y + camRow2.x * d.z;
+      float cy = camRow0.y * d.x + camRow1.y * d.y + camRow2.y * d.z;
+      float cz = camRow0.z * d.x + camRow1.z * d.y + camRow2.z * d.z;
+      if (cz > -1e-3f) {
+        inside = 0.0f;
+        return 0.0f;
+      }
+      float u = 0.5f + (cx / -cz) * focal / haperture;
+      float v = 0.5f + (cy / -cz) * focal / vaperture;
+      // The format is the camera's frame; overscan baked into a bigger format sits around it.
+      float x = cloudsOverscan.x + u * (cloudsSize.x - 2.0f * cloudsOverscan.x);
+      float y = cloudsOverscan.y + v * (cloudsSize.y - 2.0f * cloudsOverscan.y);
+      if (x < clouds.bounds.x1 || x >= clouds.bounds.x2 || y < clouds.bounds.y1 || y >= clouds.bounds.y2) {
+        inside = 0.0f;
+        return 0.0f;
+      }
+      float4 c = bilinear(clouds, x - 0.5f, y - 0.5f);
+      a = c.w;
+      if (pass + 1 < passes) {
+        if (c.x <= 0.0f || a < 0.5f)
+          break;
+        float z = c.x * sceneScale;
+        float vy = (v - 0.5f) * vaperture / focal;
+        float ux = (u - 0.5f) * haperture / focal;
+        float next = cameraOrigin().y + z * (camRow1.x * ux + camRow1.y * vy - camRow1.z);
+        if (next <= p.y + 1.0f)
+          break;
+        height = next;
+      }
     }
-    float a = bilinear(clouds, x - 0.5f, y - 0.5f).w;
     return clamp(a * cloudDensity, 0.0f, 1.0f);
   }
 
@@ -230,6 +287,12 @@ local:
     float3 surface = float3(P.x, P.y, P.z) * sceneScale;
     float3 dir = sky ? viewDir(u, v) : normalize(surface - origin);
     float dist = sky ? skyDistance : length(surface - origin);
+
+    if (output == 3) {
+      float3 c = sunLight(dir, float2(u, v));
+      dst() = float4(c.x, c.y, c.z, 1.0f);
+      return;
+    }
 
     if (output == 1) {
       // Sky counts as lit, so a matte scaled up from a smaller size has no dark rims on ridges.

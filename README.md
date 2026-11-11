@@ -19,6 +19,8 @@ the same node as a gizmo.
 | `clouds` | The flattened clouds render (rgba + depth), from the shot camera. Overscan in its bbox works as is. Overscan baked into a bigger format is assumed to sit evenly around the frame. |
 | `camera` | The shot camera. |
 | `atmos` | Optional: an EzAtmosScatter. Gives the sun direction, the units, and the sunlit haze colour (`atmos_haze_sun`; output Lat-long or Camera). |
+| `sunclouds` | Optional: the clouds' opacity from an orthographic camera looking along the sun (see *Sun-view clouds*). |
+| `suncam` | That orthographic camera. |
 | `sun` | Optional: an Axis. Its world position is the direction towards the sun, and it wins over the atmos sun under **sun from: Auto**. |
 
 ## Outputs
@@ -43,6 +45,8 @@ rgba is the env render, or whatever **view** picks. Two layers are added:
 3. **Shafts.** `shafts.rgb x shafts` is added on top.
 
 **layer breakout** builds the same comp next to the node as plain Shuffles, Expressions and Merges. Their values follow the node's Comp knobs, and a Difference at the bottom is black while **view** is Comp. Use it to re-comp over the full-res image or to change the recipe.
+
+**haze color from** picks the haze colour: **Color** uses **haze color**; **EzAtmosScatter** reads the atmos's sky haze along each view ray, times **haze tint**, so the air matches the sky.
 
 **soften (px)** blurs the shafts and shafts_lit layers to take out the sampling grain of long rays. With **edge aware** on (the default), pixels only average with neighbours at about the same distance from the camera, so beams do not bleed across ridge lines.
 
@@ -73,6 +77,8 @@ pixels). It also reports how much of the ground the gobo reaches.
 Units are metres inside. **units to metres** turns the scene's units into metres (0.1 for
 decimetres), and Analyze copies it from EzAtmosScatter.
 
+**use cloud depth** casts each cloud from the height its depth says instead of one flat **cloud height**. Use it for clouds at clearly different heights, with a good `depth.Z`. Leave it off for a single layer.
+
 **gap contrast** and **gap threshold** apply levels to the clouds' alpha before it is used, so thin or soft cloud renders give crisper beams. The defaults (1 and 0.5) change nothing, and the render itself isn't touched. Gobo Check shows the effect.
 
 **look** and **apply look** set the haze, beams and Comp knobs to a starting point: Soft Morning, God Rays, Storm Break or Golden Hour, or Reset. Press Analyze first, so the haze suits the scene's size.
@@ -96,6 +102,16 @@ this is the share of the visible ground the gobo reaches:
 Ground past the gobo takes **outside frame** (Lit or Shadowed). Shots towards the sun work
 best. For other shots, more overscan (especially at the top of frame) helps. A clouds pass
 rendered from the sun would remove the limit, if a shot needs it.
+
+### Sun-view clouds: no in-frame limit
+
+For a shot where the sun isn't ahead of the camera, ask CG for one extra render:
+
+- The clouds' opacity in alpha, from an **orthographic** camera looking along the sun (its -Z towards the ground, along the sun direction).
+- Wide enough to cover the ground in shot and the air above it. Note that width in scene units.
+- That camera exported too.
+
+Plug the render into `sunclouds` and the camera into `suncam`, and set **sun view width** to the width. The gobo then reads that render everywhere, and the plate's overscan no longer matters.
 
 ## Files
 

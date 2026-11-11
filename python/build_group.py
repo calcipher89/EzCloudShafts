@@ -10,7 +10,8 @@ out with node_layout.py (layout_hints.py says how).
 
 Inputs: 0 env (the environment render with a world position layer), 1 clouds (the flattened
 clouds render: rgba + depth), 2 camera, 3 atmos (an EzAtmosScatter, optional: sun direction
-and colour), 4 sun (an Axis, optional: overrides the sun direction).
+and colour), 4 sun (an Axis, optional: overrides the sun direction), 5 sunclouds (optional: the
+clouds' opacity from an orthographic camera along the sun), 6 suncam (that camera).
 """
 
 import base64
@@ -32,8 +33,8 @@ KERNEL = "EzCloudShafts"
 # on "computing". The hash can't be worked out without Nuke, so it's pinned to the source it
 # came from. After editing the kernel: load the .blink in a BlinkScript in NukeX, recompile,
 # take the 5th word of its KernelDescription, and update both of these.
-KERNEL_SOURCE_SHA256 = "0b2c04f075fd13c3f3910f69da508a71a7a1c978b30d5da2c1f6096f98f020c6"
-KERNEL_NUKE_HASH = "106d569df343c1e3dbdfc68cf193a02da2cd54eeac79b6c3058db7d2fb0f43da"
+KERNEL_SOURCE_SHA256 = "bf934147338fcaf467521dde28d1072dabcf42a78be024b2875ca7f58d99e4a8"
+KERNEL_NUKE_HASH = "73c6fc51b82e395f1a211ae8c60f3ace8e4f20478ec0258b84c0109ae9e26207"
 # The soften kernel, pinned the same way.
 SOFTEN_KERNEL = "EzCloudShaftsSoften"
 SOFTEN_SOURCE_SHA256 = "ab1c6cd45fdaa9f53d370f2a251842258cbc01eddfe4d7c824f9181d74c11d38"
@@ -48,7 +49,9 @@ LAYERS = {"P": ["red", "green", "blue"],
           "shafts": ["red", "green", "blue", "alpha"],
           "cloudshadow": ["red", "green", "blue", "alpha"],
           "shafts_lit": ["red", "green", "blue", "alpha"],
-          "atmos_haze_sun": ["red", "green", "blue"]}
+          "atmos_haze_sun": ["red", "green", "blue"],
+          "atmos_haze_sky": ["red", "green", "blue"],
+          "shafts_haze": ["red", "green", "blue"]}
 
 # Kernel parameters, in the kernel's order: (name, variable, type, count, default).
 PARAMS = [
@@ -85,10 +88,17 @@ PARAMS = [
     ("shaft_color", "shaftColor", "Float", 3, (1, 0.9, 0.75)),
     ("shaft_intensity", "shaftIntensity", "Float", 1, 1.0),
     ("seed", "seed", "Float", 1, 1.0),
+    ("use_depth", "useDepth", "Int", 1, 0),
+    ("use_sun_view", "useSunView", "Int", 1, 0),
+    ("sun_row0", "sunRow0", "Float", 3, (1, 0, 0)),
+    ("sun_row1", "sunRow1", "Float", 3, (0, 1, 0)),
+    ("sun_row2", "sunRow2", "Float", 3, (0, 0, 1)),
+    ("sun_position", "sunPosition", "Float", 3, (0, 0, 0)),
+    ("sun_width", "sunWidth", "Float", 1, 100000.0),
 ]
 LOCALS = [("pi", 1), ("sunWorld", 3), ("sunX", 3), ("sunY", 3)]
 IMAGES = [("pos", "Read", "Point"), ("clouds", "Read", "Random"), ("envSun", "Read", "Random"),
-          ("dst", "Write", "Point")]
+          ("sunClouds", "Read", "Random"), ("dst", "Write", "Point")]
 
 
 def q(text):
@@ -161,6 +171,7 @@ def _find(var, index, knob):
 FIND_CAMERA = _find("c", 2, "focal")
 FIND_ATMOS = _find("a", 3, "haze_density")
 FIND_AXIS = _find("x", 4, "world_matrix")
+FIND_SUNCAM = _find("c", 6, "world_matrix")
 
 
 def py_expr(code):
@@ -393,6 +404,13 @@ if cam is not None:
     elif height > 15000:
         warns.append((1, 'Cloud height %.0f m is implausibly high. It is in metres whatever the scene units are.' % height))
 
+if n['sun_view_on'].value():
+    kept = []
+    for w in warns:
+        if 'gobo' not in w[1].lower():
+            kept.append(w)
+    warns = kept
+    notes.append('Sun-view clouds in use: the gobo is not limited to the frame.')
 warns.sort()
 status = warns[0][1] if warns else 'OK: the sun, units and gobo all look right.'
 n['status'].setValue(status)
@@ -451,11 +469,12 @@ else:
         # Row 0: the env trunk on the left, then a row of Dots from the node, one per layer.
         trunk = dot(0, 0, env)
         heads = [dot(2, 0, n)]
-        for cx in (3, 4):
+        for cx in (3, 4, 5):
             heads.append(dot(cx, 0, heads[-1]))
         shadow = pick('cloudshadow', 2, heads[0])
         lit = pick('shafts_lit', 3, heads[1])
         shafts = pick('shafts', 4, heads[2])
+        haze_col = pick('shafts_haze', 5, heads[3])
 
         # Cloud shadow: take the shadowed share of the sun light away from the env.
         if n['use_sun_layer'].value():
@@ -477,22 +496,24 @@ else:
                      3, 5, lit)
         hazed = place(nuke.nodes.Merge2(operation='multiply', output='rgb', label='land x T'), 0, 6, land,
                       dot(3, 6, trans))
-        light = expr('haze_light', 'haze colour x (1 - T) x lit grade',
-                     ['(1-%s)*N.comp_haze_color.%s*(N.comp_haze_shadow+(N.comp_haze_lit-N.comp_haze_shadow)*a)'
-                      % (c, c) for c in 'rgb'] + ['a'], 3, 7, trans)
-        with_haze = place(nuke.nodes.Merge2(operation='plus', output='rgb', label='+ haze'), 0, 8, hazed,
-                          dot(3, 8, light))
-        beams = place(nuke.nodes.Merge2(operation='plus', output='rgb', label='+ shafts'), 0, 9, with_haze,
-                      dot(4, 9, shafts))
+        light = expr('haze_light', '(1 - T) x lit grade',
+                     ['(1-%s)*(N.comp_haze_shadow+(N.comp_haze_lit-N.comp_haze_shadow)*a)'
+                      % c for c in 'rgb'] + ['a'], 3, 7, trans)
+        tinted = place(nuke.nodes.Merge2(operation='multiply', output='rgb', label='x haze colour'), 3, 8, light,
+                       dot(5, 8, haze_col))
+        with_haze = place(nuke.nodes.Merge2(operation='plus', output='rgb', label='+ haze'), 0, 9, hazed,
+                          dot(3, 9, tinted))
+        beams = place(nuke.nodes.Merge2(operation='plus', output='rgb', label='+ shafts'), 0, 10, with_haze,
+                      dot(4, 10, shafts))
         beams['mix'].setExpression(N + '.comp_shafts')
 
         # Check against the node's own Comp view: black when 'view' is Comp.
-        check_dot = dot(5, 10, dot(5, 0, heads[-1]))
+        check_dot = dot(6, 11, dot(6, 0, heads[-1]))
         check = place(nuke.nodes.Merge2(name='%s_breakout_check' % n.name(), operation='difference', output='rgb',
-                                        label='black when view is Comp'), 0, 10, beams, check_dot)
+                                        label='black when view is Comp'), 0, 11, beams, check_dot)
         made.append(nuke.nodes.BackdropNode(label='%s breakout' % n.name(), note_font_size=24,
                                             xpos=int(x0 - 60), ypos=int(y0 - 80),
-                                            bdwidth=col * 6 + 60, bdheight=row * 11 + 100))
+                                            bdwidth=col * 7 + 60, bdheight=row * 12 + 100))
         for node in made:
             node.setSelected(True)
 '''
@@ -596,6 +617,7 @@ BAKE_WATCH = ["position_layer", "scene_scale", "sun_from", "sun_direction", "clo
               "shadow_strength", "gap_contrast", "gap_threshold", "outside_frame", "penumbra", "samples", "drift_x",
               "drift_z", "drift_frame", "shaft_density", "haze_height", "shaft_start", "max_distance", "sky_distance",
               "march_steps", "color_from", "shaft_color", "shaft_intensity", "soften", "edge_aware",
+              "use_cloud_depth", "sun_view_width",
               "render_resolution", "shafts_resolution"]
 
 BAKE_HASH = ("import hashlib\n"
@@ -610,8 +632,11 @@ BAKE_HASH = ("import hashlib\n"
 
 # Whether the bake can be used: it exists and the settings still match. Sets the hidden
 # bake_valid knob the Use_* Switches read, and a label. Run from knobChanged and onCreate.
-BAKE_CHECK = ("g = nuke.thisNode()\n"
-              "if g.knob('bake_valid') is not None:\n" + "".join("    " + line + "\n" for line in (
+# In its own function: a knob change inside a button's script runs this in the same Python
+# namespace, and its names must not overwrite that script's variables.
+BAKE_CHECK = ("def _ezcs_check(g):\n"
+              "    if g.knob('bake_valid') is None:\n"
+              "        return\n" + "".join("    " + line + "\n" for line in (
                   BAKE_HASH +
                   "import os, re\n"
                   "r = g.node('BakeRead')\n"
@@ -626,7 +651,8 @@ BAKE_CHECK = ("g = nuke.thisNode()\n"
                   "    g['bake_valid'].setValue(ok)\n"
                   "text = ('baked' if ok else 'bake out of date: live') if g['use_baked'].value() and g['baked_hash'].value() else ''\n"
                   "if g['label'].value() in ('', 'baked', 'bake out of date: live') and g['label'].value() != text:\n"
-                  "    g['label'].setValue(text)\n").splitlines()))
+                  "    g['label'].setValue(text)\n").splitlines()) +
+              "_ezcs_check(nuke.thisNode())\n")
 
 KNOB_CHANGED = ("if nuke.thisKnob().name() in %r:\n" % (BAKE_WATCH + ["use_baked", "bake_file", "bake_folder", "baked_hash",
                                                                        "baked_first", "inputChange"]) +
@@ -770,6 +796,13 @@ def knob_lines():
     add('addUserKnob {7 gap_threshold l "gap threshold" t %s}'
         % q("The alpha that stays at 0.5 under 'gap contrast'. Higher opens more gaps; lower closes them."))
     add('gap_threshold 0.5')
+    add('addUserKnob {6 use_cloud_depth l "use cloud depth" t %s +STARTLINE}'
+        % q("Casts each cloud from the height its depth says, instead of one flat 'cloud height'. For clouds at "
+            "clearly different heights; needs a good depth channel. Off suits a single layer."))
+    add('addUserKnob {7 sun_view_width l "sun view width" t %s R 0 1000000}'
+        % q("With the 'sunclouds' input: the width the sun-view render covers, in scene units (the orthographic "
+            "camera's width)."))
+    add('sun_view_width 100000')
     add('addUserKnob {7 shadow_strength l "shadow strength" t %s}'
         % q("How much sunlight the cloud takes away: 1 is all of it."))
     add('shadow_strength 1')
@@ -837,6 +870,11 @@ def knob_lines():
     add('comp_haze 1')
     add('addUserKnob {18 comp_haze_color l "haze color" t %s}' % q("Colour of the haze light."))
     add('comp_haze_color {0.06 0.13 0.33}')
+    add('addUserKnob {4 comp_haze_from l "haze color from" t %s M {Color EzAtmosScatter}}'
+        % q("Color: 'haze color'. EzAtmosScatter: the atmos's sky haze along each view ray, times 'haze tint', so "
+            "the air matches the sky. Without an atmos input it is Color."))
+    add('addUserKnob {18 comp_haze_tint l "haze tint" t %s}' % q("Multiplies the atmos's sky haze."))
+    add('comp_haze_tint 1')
     add('addUserKnob {18 comp_haze_falloff l "haze falloff" t %s}'
         % q("How fast each colour fades with distance: higher fades sooner. Blue above red gives the warm "
             "near, blue far of aerial perspective."))
@@ -908,6 +946,13 @@ def knob_lines():
     add('axis_position {%s}' % " ".join(
         "{%s}" % q(py_expr(FIND_AXIS + "ret = x['world_matrix'].getValueAt(nuke.frame(), %d) "
                                        "if x is not None else 0" % (3 + 4 * i))) for i in range(3)))
+    # The orthographic sun-view camera.
+    add('addUserKnob {3 sun_view_on +INVISIBLE}')
+    add('sun_view_on {{"\\[exists input5] && \\[exists input6]"}}')
+    add('addUserKnob {78 sun_world_matrix +INVISIBLE n 16}')
+    add('sun_world_matrix {%s}' % " ".join(
+        "{%s}" % q(py_expr(FIND_SUNCAM + "ret = c['world_matrix'].getValueAt(nuke.frame(), %d) "
+                                         "if c is not None else %d" % (i, identity[i]))) for i in range(16)))
     # 0 manual, 1 Axis, 2 atmos.
     add('addUserKnob {3 sun_source +INVISIBLE}')
     add('sun_source {{"sun_from==1 ? (axis_found ? 1 : 0) : sun_from==2 ? (atm_found ? 2 : 0) : '
@@ -938,7 +983,7 @@ ALPHA_TO_RGB = '"4 %s"' % " ".join(
     ["rgba.alpha 0 3 rgba.alpha 0 3"])
 
 
-def blink_node(name, output, source, work):
+def blink_node(name, output, source, work, overrides=None):
     links = {
         "output": str(output),
         "frame_size": "{%s.width} {%s.height}" % (work, work),
@@ -975,7 +1020,15 @@ def blink_node(name, output, source, work):
         "shaft_color": "{parent.shaft_color.r} {parent.shaft_color.g} {parent.shaft_color.b}",
         "shaft_intensity": "{parent.shaft_intensity}",
         "seed": "{frame}",
+        "use_depth": "{parent.use_cloud_depth}",
+        "use_sun_view": "{parent.sun_view_on}",
+        "sun_row0": "{parent.sun_world_matrix.0} {parent.sun_world_matrix.1} {parent.sun_world_matrix.2}",
+        "sun_row1": "{parent.sun_world_matrix.4} {parent.sun_world_matrix.5} {parent.sun_world_matrix.6}",
+        "sun_row2": "{parent.sun_world_matrix.8} {parent.sun_world_matrix.9} {parent.sun_world_matrix.10}",
+        "sun_position": "{parent.sun_world_matrix.3} {parent.sun_world_matrix.7} {parent.sun_world_matrix.11}",
+        "sun_width": "{parent.sun_view_width}",
     }
+    links.update(overrides or {})
     assert set(links) == set(p[0] for p in PARAMS), set(p[0] for p in PARAMS) ^ set(links)
     body = ["recompileCount 1",
             "KernelDescription " + kernel_description(source),
@@ -995,6 +1048,18 @@ def work_reformat(scale):
 def full_reformat():
     return ["type \"to box\"", "box_width {{PositionPick.width}}", "box_height {{PositionPick.height}}",
             "box_fixed true", "resize distort", "filter cubic"]
+
+
+def depth_pick():
+    """Shuffle2 knobs: the clouds' depth into red, for the kernel, when 'use cloud depth' is on."""
+    return ["fromInput1 {{0} B}", "in1 depth", "fromInput2 {{0} B}", "in2 rgba",
+            'mappings "4 depth.Z 0 0 rgba.red 0 0 rgba.green 1 1 rgba.green 0 1 rgba.blue 1 2 rgba.blue 0 2 '
+            'rgba.alpha 1 3 rgba.alpha 0 3"', 'disable {{"!parent.use_cloud_depth"}}']
+
+
+def haze_layer_copy():
+    return ["inputs 2"] + ["from%d rgba.%s\n  to%d shafts_haze.%s" % (i, c, i, c)
+                           for i, c in enumerate(("red", "green", "blue"))]
 
 
 def layer_copy(layer):
@@ -1023,14 +1088,26 @@ def nodes(source):
         ("camera", "Input", [], ["inputs 0", "number 2"]),
         ("atmos", "Input", [], ["inputs 0", "number 3"]),
         ("sun", "Input", [], ["inputs 0", "number 4"]),
+        ("sunclouds", "Input", [], ["inputs 0", "number 5"]),
+        ("suncam", "Input", [], ["inputs 0", "number 6"]),
         ("PositionPick", "Shuffle2", ["env"], ["fromInput1 {{0} B}", "in1 P", "fromInput2 {{0} B}",
                                                "mappings " + shuffle_mappings("P")]),
         ("NoClouds", "Constant", [], ["inputs 0", "format " + tiny]),
         ("CloudsOrNone", "Switch", ["NoClouds", "clouds"], ["inputs 2", 'which {{"\\[exists parent.input1]"}}']),
         # Levels on the gobo: the render itself isn't touched, only what the passes read.
-        ("GoboLevels", "Expression", ["CloudsOrNone"],
+        ("GoboDepth", "Shuffle2", ["CloudsOrNone"], depth_pick()),
+        ("GoboLevels", "Expression", ["GoboDepth"],
          ["channel0 none", "channel1 none", "channel2 none", "channel3 alpha",
           'expr3 "clamp(0.5+(a-parent.gap_threshold)*parent.gap_contrast,0,1)"']),
+        ("NoSunClouds", "Constant", [], ["inputs 0", "format " + tiny]),
+        ("SunCloudsOrNone", "Switch", ["NoSunClouds", "sunclouds"], ["inputs 2", 'which {{"\\[exists parent.input5]"}}']),
+        ("SunGoboLevels", "Expression", ["SunCloudsOrNone"],
+         ["channel0 none", "channel1 none", "channel2 none", "channel3 alpha",
+          'expr3 "clamp(0.5+(a-parent.gap_threshold)*parent.gap_contrast,0,1)"']),
+        ("AtmosSkyPick", "Shuffle2", ["atmos"], ["fromInput1 {{0} B}", "in1 atmos_haze_sky", "fromInput2 {{0} B}",
+                                                 "mappings " + shuffle_mappings("atmos_haze_sky")]),
+        ("NoAtmosSky", "Constant", [], ["inputs 0", "format " + tiny]),
+        ("AtmosSkyOrNone", "Switch", ["NoAtmosSky", "AtmosSkyPick"], ["inputs 2", 'which {{"\\[exists parent.input3]"}}']),
         ("AtmosSunPick", "Shuffle2", ["atmos"], ["fromInput1 {{0} B}", "in1 atmos_haze_sun", "fromInput2 {{0} B}",
                                                  "mappings " + shuffle_mappings("atmos_haze_sun")]),
         ("NoAtmos", "Constant", [], ["inputs 0", "format " + tiny]),
@@ -1039,15 +1116,20 @@ def nodes(source):
         # edge), then are scaled back up to the env's format.
         ("WorkPosMatte", "Reformat", ["PositionPick"], work_reformat("parent.matte_scale")),
         ("WorkPosShafts", "Reformat", ["PositionPick"], work_reformat("parent.shafts_scale")),
-        ("Pass_Shafts", "BlinkScript", ["WorkPosShafts", "GoboLevels", "AtmosOrNone"],
-         ["inputs 3"] + blink_node("Pass_Shafts", 0, source, "WorkPosShafts")),
-        ("Pass_Ground", "BlinkScript", ["WorkPosMatte", "GoboLevels", "AtmosOrNone"],
-         ["inputs 3"] + blink_node("Pass_Ground", 1, source, "WorkPosMatte")),
+        ("Pass_Shafts", "BlinkScript", ["WorkPosShafts", "GoboLevels", "AtmosOrNone", "SunGoboLevels"],
+         ["inputs 4"] + blink_node("Pass_Shafts", 0, source, "WorkPosShafts")),
+        ("Pass_Ground", "BlinkScript", ["WorkPosMatte", "GoboLevels", "AtmosOrNone", "SunGoboLevels"],
+         ["inputs 4"] + blink_node("Pass_Ground", 1, source, "WorkPosMatte")),
         ("Full_Shafts", "Reformat", ["Pass_Shafts"], full_reformat()),
         ("Full_Ground", "Reformat", ["Pass_Ground"], full_reformat()),
-        ("Pass_LitShare", "BlinkScript", ["WorkPosShafts", "GoboLevels", "AtmosOrNone"],
-         ["inputs 3"] + blink_node("Pass_LitShare", 2, source, "WorkPosShafts")),
+        ("Pass_LitShare", "BlinkScript", ["WorkPosShafts", "GoboLevels", "AtmosOrNone", "SunGoboLevels"],
+         ["inputs 4"] + blink_node("Pass_LitShare", 2, source, "WorkPosShafts")),
         ("Full_LitShare", "Reformat", ["Pass_LitShare"], full_reformat()),
+        # The atmos's sky haze as the camera sees it, for the Comp's haze colour.
+        ("Pass_ViewSky", "BlinkScript", ["WorkPosShafts", "GoboLevels", "AtmosSkyOrNone", "SunGoboLevels"],
+         ["inputs 4"] + blink_node("Pass_ViewSky", 3, source, "WorkPosShafts", overrides={
+             "use_env": '{"parent.atm_found"}', "shaft_color": "1 1 1"})),
+        ("Full_ViewSky", "Reformat", ["Pass_ViewSky"], full_reformat()),
         # Softened, to take the march's sampling grain out of the layers.
         ("Soft_Shafts_Blur", "Blur", ["Full_Shafts"], ["channels rgba", "size {{parent.soften}}"]),
         ("Soft_Shafts_Edge", "BlinkScript", ["Full_Shafts", "PositionPick"], soften_node()),
@@ -1102,16 +1184,22 @@ def nodes(source):
         ("Comp_LandHazed", "Merge2", ["Comp_Land", "Comp_Transmittance"],
          ["inputs 2", "operation multiply", "output rgb"]),
         ("Comp_HazeLight", "Expression", ["Comp_Transmittance"],
-         ['expr%d "(1-%s)*parent.comp_haze_color.%s*(parent.comp_haze_shadow+'
-          '(parent.comp_haze_lit-parent.comp_haze_shadow)*a)"' % (i, c, c) for i, c in enumerate("rgb")]),
-        ("Comp_PlusHaze", "Merge2", ["Comp_LandHazed", "Comp_HazeLight"],
+         ['expr%d "(1-%s)*(parent.comp_haze_shadow+'
+          '(parent.comp_haze_lit-parent.comp_haze_shadow)*a)"' % (i, c) for i, c in enumerate("rgb")]),
+        ("Comp_HazeColor", "Expression", ["Full_ViewSky"],
+         ['expr%d "parent.comp_haze_from==1&&parent.atm_found ? %s*parent.comp_haze_tint.%s : parent.comp_haze_color.%s"'
+          % (i, c, c, c) for i, c in enumerate("rgb")]),
+        ("Comp_HazeTinted", "Merge2", ["Comp_HazeLight", "Comp_HazeColor"],
+         ["inputs 2", "operation multiply", "output rgb"]),
+        ("Comp_LayerHaze", "Copy", ["Layer_LitShare", "Comp_HazeColor"], haze_layer_copy()),
+        ("Comp_PlusHaze", "Merge2", ["Comp_LandHazed", "Comp_HazeTinted"],
          ["inputs 2", "operation plus", "output rgb"]),
         ("Comp_PlusShafts", "Merge2", ["Comp_PlusHaze", "Use_Shafts"],
          ["inputs 2", "operation plus", "output rgb", "mix {{parent.comp_shafts}}"]),
-        ("ViewOutput", "Switch", ["Layer_LitShare", "ShaftsOver", "ShadowView", "Use_Ground", "ShaftsMatteView",
+        ("ViewOutput", "Switch", ["Comp_LayerHaze", "ShaftsOver", "ShadowView", "Use_Ground", "ShaftsMatteView",
                                   "Use_LitShare", "Comp_PlusShafts"],
          ["inputs 7", "which {{parent.view}}"]),
-        ("MainRGB", "Copy", ["Layer_LitShare", "ViewOutput"], ["inputs 2", "channels rgb"]),
+        ("MainRGB", "Copy", ["Comp_LayerHaze", "ViewOutput"], ["inputs 2", "channels rgb"]),
         ("Output1", "Output", ["MainRGB"], []),
     ]
 
