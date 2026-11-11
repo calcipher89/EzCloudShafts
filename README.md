@@ -69,6 +69,8 @@ decimetres), and Analyze copies it from EzAtmosScatter.
 
 **gap contrast** and **gap threshold** apply levels to the clouds' alpha before it is used, so thin or soft cloud renders give crisper beams. The defaults (1 and 0.5) change nothing, and the render itself isn't touched. Gobo Check shows the effect.
 
+**look** and **apply look** set the haze, beams and Comp knobs to a starting point: Soft Morning, God Rays, Storm Break or Golden Hour, or Reset. Press Analyze first, so the haze suits the scene's size.
+
 **Analyze** also finds the position and sun light layers by their usual names, sets the haze density and distances from how deep the scene is (only while those knobs are at their defaults), and warns in plain words about a sun behind or beside the camera, a high sun, short gobo coverage (naming the side to extend), an implausible cloud height or wrong units. The main warning stays in the **status** line.
 
 ### Coverage: what the camera doesn't see can't cast

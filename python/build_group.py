@@ -498,6 +498,76 @@ else:
 '''
 
 
+# ---- The looks -----------------------------------------------------------------------------
+# Haze is set from the depth Analyze measured, so a look means the same on any scene; intensity
+# from how bright the atmos's sun colour is. Kept to top-level code: Nuke runs button scripts
+# with separate locals.
+APPLY_LOOK = r"""
+import math
+n = nuke.thisNode()
+look = n['look'].value()
+# tau: optical depth at the scene's median distance. height: haze height as a share of it.
+# beam: target brightness of the beams.
+looks = {
+    'Soft Morning': dict(tau=0.5, height=0.7, beam=2.8, penumbra=0.8, steps=96, soften=6, gap=1.0,
+                         tint=[1.0, 0.96, 0.9], haze=[0.13, 0.17, 0.26], falloff=[0.85, 1.0, 1.2],
+                         shadow=0.65, lit=1.2),
+    'God Rays': dict(tau=0.35, height=0.45, beam=4.0, penumbra=0.4, steps=128, soften=5, gap=1.0,
+                     tint=[0.9, 0.95, 1.1], haze=[0.06, 0.13, 0.33], falloff=[0.75, 1.0, 1.4],
+                     shadow=0.35, lit=1.5),
+    'Storm Break': dict(tau=0.55, height=0.4, beam=4.0, penumbra=0.3, steps=128, soften=4, gap=2.5,
+                        tint=[0.85, 0.93, 1.15], haze=[0.03, 0.05, 0.11], falloff=[0.9, 1.0, 1.15],
+                        shadow=0.2, lit=1.8),
+    'Golden Hour': dict(tau=0.4, height=0.5, beam=3.4, penumbra=0.5, steps=128, soften=5, gap=1.2,
+                        tint=[1.25, 0.88, 0.55], haze=[0.2, 0.12, 0.09], falloff=[0.6, 1.0, 1.6],
+                        shadow=0.45, lit=1.6),
+}
+if look == 'Reset':
+    for knob, value in (('shaft_density', 0.1), ('haze_height', 1.2), ('penumbra', 0.5), ('march_steps', 32),
+                        ('soften', 4), ('gap_contrast', 1), ('gap_threshold', 0.5), ('shaft_intensity', 1),
+                        ('comp_haze', 1), ('comp_haze_shadow', 0.35), ('comp_haze_lit', 1.5), ('comp_shafts', 1)):
+        n[knob].setValue(value)
+    n['shaft_color'].setValue(1)
+    n['comp_haze_color'].setValue([0.06, 0.13, 0.33])
+    n['comp_haze_falloff'].setValue([0.75, 1.0, 1.4])
+else:
+    p = looks[look]
+    depth = n['scene_depth'].value()
+    if depth <= 0:
+        depth = 3.0
+        nuke.message('This look used a guessed scene depth of 3 km. Press Analyze, then apply it again.')
+    # How bright the beams' colour is along the sun, so the look doesn't depend on the atmos's level.
+    level = 1.0
+    if int(n['color_from'].getValue()) == 0 and n['atm_found'].value():
+        sun = [n['sun_in_use'].value(i) for i in range(3)]
+        norm = math.sqrt(sun[0] ** 2 + sun[1] ** 2 + sun[2] ** 2) or 1.0
+        with n:
+            src = nuke.toNode('AtmosOrNone')
+            if n['atm_screen'].value():
+                u, v = 0.5, 0.9
+            else:
+                lon = math.atan2(sun[0], -sun[2]) - math.radians(n['atm_rotation'].value())
+                u = (lon / (2 * math.pi) + 0.5) % 1.0
+                v = math.asin(max(-1.0, min(1.0, sun[1] / norm))) / math.pi + 0.5
+            level = max(src.sample('green', u * src.width(), v * src.height()), 1e-3)
+    n['shaft_density'].setValue(round(p['tau'] / depth, 4))
+    n['haze_height'].setValue(round(min(5.0, max(0.2, p['height'] * depth)), 2))
+    n['penumbra'].setValue(p['penumbra'])
+    n['march_steps'].setValue(p['steps'])
+    n['soften'].setValue(p['soften'])
+    n['gap_contrast'].setValue(p['gap'])
+    n['gap_threshold'].setValue(0.5)
+    n['shaft_color'].setValue(p['tint'])
+    n['shaft_intensity'].setValue(round(p['beam'] / level, 4))
+    n['comp_haze'].setValue(1)
+    n['comp_haze_color'].setValue(p['haze'])
+    n['comp_haze_falloff'].setValue(p['falloff'])
+    n['comp_haze_shadow'].setValue(p['shadow'])
+    n['comp_haze_lit'].setValue(p['lit'])
+    n['comp_shafts'].setValue(1)
+"""
+
+
 # ---- The group's knobs -------------------------------------------------------------------
 
 def knob_lines():
@@ -517,6 +587,12 @@ def knob_lines():
         % (q("Builds the Comp view from this node's layers next to it, as plain nodes: cloud shadow on the sun "
              "light, haze from shafts_lit, then the shafts. Their values follow the Comp knobs, and a Difference "
              "at the bottom is black while 'view' is Comp."), q(BREAKOUT)))
+    add('addUserKnob {4 look t %s M {"Soft Morning" "God Rays" "Storm Break" "Golden Hour" Reset}}'
+        % q("A starting point for the haze, beams and Comp knobs. Press Analyze first, so the haze suits the "
+            "scene's size, then 'apply look'. Reset puts those knobs back to their defaults."))
+    add('look "God Rays"')
+    add('addUserKnob {22 apply_look l "apply look" t %s T %s -STARTLINE}'
+        % (q("Sets the knobs from the chosen look."), q(APPLY_LOOK)))
     add('addUserKnob {1 status t %s +DISABLED}'
         % q("The main warning from the last Analyze. It doesn't update by itself: press Analyze again."))
     add('status "Press Analyze to check the setup."')
