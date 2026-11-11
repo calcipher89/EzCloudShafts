@@ -34,6 +34,18 @@ rgba is the env render, or whatever **view** picks. Two layers are added:
 | `cloudshadow.a` | Sun visibility on the ground: 1 lit, 0 under cloud, with soft edges. Multiply the sun light group by it, or use it as a grade matte. |
 | `cloudshadow.rgb` | The gobo at the ground from the sun's centre, unsoftened (the **Gobo Check** view), for lining it up. |
 
+## Comp view and breakout
+
+**view: Comp** (the default) is the finished look, built inside the node from its own layers:
+
+1. **Cloud shadow.** The env loses its sun light under cloud: `env - sun light x (1 - cloudshadow.a) x cloud shadow`. With **sun light layer** on, only that light group is shadowed; off, the whole env is.
+2. **Haze.** `T = (1 - shafts_lit.a) ^ (haze amount x haze falloff)`, then `land x T + haze color x (1 - T) x grade`. The grade runs from **haze in shadow** to **haze in sun** by `shafts_lit.rgb`, which darkens the air between the beams.
+3. **Shafts.** `shafts.rgb x shafts` is added on top.
+
+**layer breakout** builds the same comp next to the node as plain Shuffles, Expressions and Merges. Their values follow the node's Comp knobs, and a Difference at the bottom is black while **view** is Comp. Use it to re-comp over the full-res image or to change the recipe.
+
+**soften (px)** blurs the shafts and shafts_lit layers to take out the sampling grain of long rays.
+
 ## Speed
 
 The passes run at a reduced size and are scaled back up to the env's format.
