@@ -78,6 +78,40 @@ def render_clouds(ovs):
     return a
 
 
+TALL_H = 2600.0
+
+
+def tall_pattern(x, z):
+    """A second, higher layer: a few wide clouds, by world x, z."""
+    gx = (x / 4000.0) % 1.0 - 0.5
+    gz = (z / 4000.0) % 1.0 - 0.5
+    return np.clip((900.0 - np.sqrt(gx ** 2 + gz ** 2) * 4000.0) / 40.0 + 0.5, 0.0, 1.0)
+
+
+def render_tall_clouds(ovs):
+    """Clouds at 1500 m with taller ones at 2600 m in front of them where they overlap in view:
+    alpha, and Planar Z in scene units."""
+    origin = CAM_POS * SCALE
+    d = view_dirs(W + 2 * ovs, H + 2 * ovs, ovs)
+    up = np.maximum(d[..., 1], 1e-6)
+    t1 = (CLOUD_H - origin[1]) / up
+    t2 = (TALL_H - origin[1]) / up
+    h1 = origin + d * t1[..., None]
+    h2 = origin + d * t2[..., None]
+    a1 = hole_pattern(h1[..., 0], h1[..., 2]) * 0.0
+    a2 = tall_pattern(h2[..., 0], h2[..., 2])
+    a = np.maximum(a1, a2)
+    fwd = (d @ R)[..., 2] * -1.0
+    z = np.where(a2 >= 0.5, t2 * fwd, 0.0) / SCALE
+    a[d[..., 1] <= 1e-3] = 0.0
+    return a, z
+
+
+def tall_truth(surf, sun):
+    hit = surf + sun * ((TALL_H - surf[:, 1]) / sun[1])[:, None]
+    return tall_pattern(hit[:, 0], hit[:, 2])
+
+
 def bilinear(img, x, y):
     h, w = img.shape
     x = np.clip(x - 0.5, 0, w - 1)
@@ -92,30 +126,38 @@ def bilinear(img, x, y):
 class Kernel(object):
     """The kernel's cloudOpacity / sunThrough, vectorised over points."""
 
-    def __init__(self, clouds, ovs, density=1.0, strength=1.0, outside_lit=True, height=CLOUD_H):
-        self.clouds, self.ovs, self.height = clouds, ovs, height
+    def __init__(self, clouds, ovs, density=1.0, strength=1.0, outside_lit=True, height=CLOUD_H, depth=None):
+        self.clouds, self.ovs, self.height, self.depth = clouds, ovs, height, depth
         self.density, self.strength, self.outside_lit = density, strength, outside_lit
 
     def sun_through(self, p, sun):
         origin = CAM_POS * SCALE
-        inside = np.ones(p.shape[:-1], bool)
-        above = p[..., 1] >= self.height
-        hit = p + sun * ((self.height - p[..., 1]) / sun[1])[..., None]
-        d = hit - origin
-        c = d @ R                       # transpose of the rotation
-        behind = c[..., 2] > -1e-3
-        u = 0.5 + (c[..., 0] / -c[..., 2]) * FOCAL / HAP
-        v = 0.5 + (c[..., 1] / -c[..., 2]) * FOCAL / VAP
         ch, cw = self.clouds.shape
-        x = self.ovs + u * (cw - 2 * self.ovs)
-        y = self.ovs + v * (ch - 2 * self.ovs)
-        out = behind | (x < 0) | (x >= cw) | (y < 0) | (y >= ch)
-        o = np.clip(bilinear(self.clouds, np.nan_to_num(x), np.nan_to_num(y)) * self.density, 0, 1)
+        height = np.full(p.shape[:-1], float(self.height))
+        above = p[..., 1] >= self.height
+        passes = 3 if self.depth is not None else 1
+        for i in range(passes):
+            hit = p + sun * ((height - p[..., 1]) / sun[1])[..., None]
+            c = (hit - origin) @ R          # transpose of the rotation
+            behind = c[..., 2] > -1e-3
+            u = 0.5 + (c[..., 0] / -c[..., 2]) * FOCAL / HAP
+            v = 0.5 + (c[..., 1] / -c[..., 2]) * FOCAL / VAP
+            x = self.ovs + u * (cw - 2 * self.ovs)
+            y = self.ovs + v * (ch - 2 * self.ovs)
+            out = behind | (x < 0) | (x >= cw) | (y < 0) | (y >= ch)
+            a = bilinear(self.clouds, np.nan_to_num(x), np.nan_to_num(y))
+            if i + 1 < passes:
+                z = bilinear(self.depth, np.nan_to_num(x), np.nan_to_num(y)) * SCALE
+                ux = (u - 0.5) * HAP / FOCAL
+                vy = (v - 0.5) * VAP / FOCAL
+                nxt = origin[1] + z * (R[1, 0] * ux + R[1, 1] * vy - R[1, 2])
+                ok = (z > 0) & (a >= 0.5) & (nxt > p[..., 1] + 1.0)
+                height = np.where(ok, nxt, height)
+        o = np.clip(a * self.density, 0, 1)
         lit = 1.0 - self.strength * o
         lit = np.where(out, 1.0 if self.outside_lit else 1.0 - self.strength, lit)
         lit = np.where(above, 1.0, lit)
-        inside &= ~out
-        return lit, inside
+        return lit, ~out
 
 
 def shafts(kernel, P, d, steps=48, density=1e-4, haze_h=1200.0, sky_distance=20000.0):
@@ -179,6 +221,14 @@ def main():
     print("shafts in range: %s, beam contrast (p90 - p10 of lit share): %.2f"
           % (bool((lit <= free + 1e-9).all() and (lit >= 0).all()),
              np.percentile(ratio, 90) - np.percentile(ratio, 10)))
+
+    # Thickness: clouds at two heights, cast from a flat sheet and from their real heights.
+    clouds2, depth2 = render_tall_clouds(160)
+    truth2 = 1.0 - tall_truth(surf, sun)
+    for name, dep in (("flat sheet", None), ("cloud depth", depth2)):
+        lit, inside = Kernel(clouds2, 160, depth=dep).sun_through(surf, sun)
+        err = np.abs(lit - truth2)[inside]
+        print("tall clouds, %-11s: mean err %.3f, within 0.1 on %5.1f%%" % (name, err.mean(), 100 * (err < 0.1).mean()))
 
     # Coverage: the share of the ground whose sun ray meets the sheet inside the clouds render.
     for name, s in (("ahead", [0.0, 0.6, -0.8]), ("side", [0.8, 0.6, 0.0]), ("behind", [0.0, 0.6, 0.8]),

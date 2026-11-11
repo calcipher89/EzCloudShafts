@@ -1,0 +1,54 @@
+// EzCloudShaftsSoften: takes the march's grain out of the shafts layers without blurring beams
+// across ridge lines. Each pixel averages its neighbours at about the same distance from the
+// camera, so the grain melts while silhouettes stay sharp. Sky (P = 0) only averages with sky.
+//
+// Inputs: `src` the pass to soften, `pos` world position in scene units.
+
+kernel EzCloudShaftsSoften : ImageComputationKernel<ePixelWise>
+{
+  Image<eRead, eAccessRandom, eEdgeClamped> src;
+  Image<eRead, eAccessRandom, eEdgeClamped> pos;
+  Image<eWrite> dst;
+
+param:
+  float radius;
+  float edge;
+  float3 camPosition;
+
+  void define()
+  {
+    defineParam(radius, "radius", 4.0f);
+    defineParam(edge, "edge", 0.03f);
+    defineParam(camPosition, "cam_position", float3(0.0f, 0.0f, 0.0f));
+  }
+
+  // Distance on a log scale, so "about the same" means the same ratio near and far.
+  float key(float4 p)
+  {
+    if (p.x == 0.0f && p.y == 0.0f && p.z == 0.0f)
+      return 1e6f;
+    return log(length(float3(p.x, p.y, p.z) - camPosition) + 1e-3f);
+  }
+
+  void process(int2 xy)
+  {
+    int r = int(radius + 0.5f);
+    if (r <= 0) {
+      dst() = src(xy.x, xy.y);
+      return;
+    }
+    float kc = key(pos(xy.x, xy.y));
+    float sigma2 = 2.0f * (radius * 0.6f) * (radius * 0.6f);
+    float4 sum = float4(0.0f);
+    float wsum = 0.0f;
+    for (int dy = -r; dy <= r; dy++) {
+      for (int dx = -r; dx <= r; dx++) {
+        float kd = (key(pos(xy.x + dx, xy.y + dy)) - kc) / edge;
+        float w = exp(-(dx * dx + dy * dy) / sigma2 - kd * kd);
+        sum += src(xy.x + dx, xy.y + dy) * w;
+        wsum += w;
+      }
+    }
+    dst() = sum / wsum;
+  }
+};
