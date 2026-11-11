@@ -32,14 +32,15 @@ KERNEL = "EzCloudShafts"
 # on "computing". The hash can't be worked out without Nuke, so it's pinned to the source it
 # came from. After editing the kernel: load the .blink in a BlinkScript in NukeX, recompile,
 # take the 5th word of its KernelDescription, and update both of these.
-KERNEL_SOURCE_SHA256 = "dd759221e4f55bf6299961f24866905d8e952fc1a247df1798a72407fab8d593"
-KERNEL_NUKE_HASH = "2e0f79eebf381953ab50a40fa16f957c094fb905ada6fc9185feed17ea5bd6b9"
+KERNEL_SOURCE_SHA256 = "0b2c04f075fd13c3f3910f69da508a71a7a1c978b30d5da2c1f6096f98f020c6"
+KERNEL_NUKE_HASH = "106d569df343c1e3dbdfc68cf193a02da2cd54eeac79b6c3058db7d2fb0f43da"
 GROUP_PATH = os.path.join(ROOT, "groups", "EzCloudShafts_group.nk")
 GIZMO_PATH = os.path.join(ROOT, "gizmos", "EzCloudShafts.gizmo")
 
 LAYERS = {"P": ["red", "green", "blue"],
           "shafts": ["red", "green", "blue", "alpha"],
           "cloudshadow": ["red", "green", "blue", "alpha"],
+          "shafts_lit": ["red", "green", "blue", "alpha"],
           "atmos_haze_sun": ["red", "green", "blue"]}
 
 # Kernel parameters, in the kernel's order: (name, variable, type, count, default).
@@ -104,7 +105,7 @@ def _b64(kind, count, value):
 def kernel_description(source):
     """What a saved BlinkScript node carries about its compiled kernel, so Nuke can make the
     parameter knobs before it compiles the source again."""
-    if hashlib.sha256(source.encode()).hexdigest() != KERNEL_SOURCE_SHA256:
+    if hashlib.sha256(source.encode()).hexdigest() != KERNEL_SOURCE_SHA256 or KERNEL_NUKE_HASH == "PENDING":
         sys.exit("The kernel changed: update KERNEL_NUKE_HASH and KERNEL_SOURCE_SHA256 (see their comment).")
     parts = ["3", '"%s"' % KERNEL, "iterate", "pixelWise", KERNEL_NUKE_HASH,
              str(len(IMAGES))]
@@ -262,6 +263,100 @@ nuke.message('EzCloudShafts analyze\n\n' + '\n'.join(notes))
 '''
 
 
+# ---- The breakout button -----------------------------------------------------------------
+# Rebuilds the node's Comp view from its layers, next to it, as plain nodes whose values
+# follow the node's Comp knobs by expression.
+BREAKOUT = r'''
+n = nuke.thisNode()
+env = n.input(0)
+if env is None:
+    nuke.message('EzCloudShafts: connect the env input first.')
+else:
+    N = n.name()
+    col, row = 180, 60
+    x0, y0 = n.xpos() + 300, n.ypos() + 60
+    with (n.parent() or nuke.root()):
+        for other in nuke.allNodes():
+            other.setSelected(False)
+        made = []
+
+        def place(node, cx, cy, src=None, src2=None):
+            node.setXYpos(int(x0 + cx * col), int(y0 + cy * row))
+            if src is not None:
+                node.setInput(0, src)
+            if src2 is not None:
+                node.setInput(1, src2)
+            made.append(node)
+            return node
+
+        def dot(cx, cy, src):
+            d = nuke.nodes.Dot()
+            d.setXYpos(int(x0 + cx * col + 34), int(y0 + cy * row + 4))
+            d.setInput(0, src)
+            made.append(d)
+            return d
+
+        def pick(layer, cx, src):
+            sh = nuke.nodes.Shuffle2(name='%s_%s' % (n.name(), layer), label='%s to rgba' % layer)
+            sh['in1'].setValue(layer)
+            return place(sh, cx, 1, src)
+
+        def expr(name, label, exprs, cx, cy, src):
+            e = nuke.nodes.Expression(name='%s_%s' % (n.name(), name), label=label)
+            for i, text in enumerate(exprs):
+                e['expr%d' % i].setValue(text.replace('N.', N + '.'))
+            return place(e, cx, cy, src)
+
+        # Row 0: the env trunk on the left, then a row of Dots from the node, one per layer.
+        trunk = dot(0, 0, env)
+        heads = [dot(2, 0, n)]
+        for cx in (3, 4):
+            heads.append(dot(cx, 0, heads[-1]))
+        shadow = pick('cloudshadow', 2, heads[0])
+        lit = pick('shafts_lit', 3, heads[1])
+        shafts = pick('shafts', 4, heads[2])
+
+        # Cloud shadow: take the shadowed share of the sun light away from the env.
+        if n['use_sun_layer'].value():
+            sun_dot = dot(1, 0, trunk)
+            sun = nuke.nodes.Shuffle2(name='%s_sunlight' % n.name(), label='sun light to rgba')
+            sun['in1'].setValue(n['sun_layer'].value())
+            sun = place(sun, 1, 1, sun_dot)
+        else:
+            sun = dot(1, 0, trunk)
+        amount = expr('shadow_amount', 'sun lost under cloud',
+                      ['(1-a)*N.comp_shadow'] * 3 + ['a'], 2, 3, shadow)
+        lost = place(nuke.nodes.Merge2(operation='multiply', output='rgb', label='sun light x lost'),
+                     1, 3, amount, sun)
+        land = place(nuke.nodes.Merge2(operation='from', output='rgb', label='cloud shadow'), 0, 4, trunk, lost)
+
+        # Haze: transmittance from shafts_lit.a, haze light graded by the lit share.
+        trans = expr('haze_transmittance', 'T = (1 - haze) ^ amount',
+                     ['pow(clamp(1-a,0,1), N.comp_haze*N.comp_haze_falloff.%s)' % c for c in 'rgb'] + ['r'],
+                     3, 5, lit)
+        hazed = place(nuke.nodes.Merge2(operation='multiply', output='rgb', label='land x T'), 0, 6, land,
+                      dot(3, 6, trans))
+        light = expr('haze_light', 'haze colour x (1 - T) x lit grade',
+                     ['(1-%s)*N.comp_haze_color.%s*(N.comp_haze_shadow+(N.comp_haze_lit-N.comp_haze_shadow)*a)'
+                      % (c, c) for c in 'rgb'] + ['a'], 3, 7, trans)
+        with_haze = place(nuke.nodes.Merge2(operation='plus', output='rgb', label='+ haze'), 0, 8, hazed,
+                          dot(3, 8, light))
+        beams = place(nuke.nodes.Merge2(operation='plus', output='rgb', label='+ shafts'), 0, 9, with_haze,
+                      dot(4, 9, shafts))
+        beams['mix'].setExpression(N + '.comp_shafts')
+
+        # Check against the node's own Comp view: black when 'view' is Comp.
+        check_dot = dot(5, 10, dot(5, 0, heads[-1]))
+        check = place(nuke.nodes.Merge2(name='%s_breakout_check' % n.name(), operation='difference', output='rgb',
+                                        label='black when view is Comp'), 0, 10, beams, check_dot)
+        made.append(nuke.nodes.BackdropNode(label='%s breakout' % n.name(), note_font_size=24,
+                                            xpos=int(x0 - 60), ypos=int(y0 - 80),
+                                            bdwidth=col * 6 + 60, bdheight=row * 11 + 100))
+        for node in made:
+            node.setSelected(True)
+'''
+
+
 # ---- The group's knobs -------------------------------------------------------------------
 
 def knob_lines():
@@ -273,10 +368,14 @@ def knob_lines():
              "units from the EzAtmosScatter in 'atmos', and reports how much of the ground the gobo reaches. "
              "Run it at a frame where the clouds are in view."), q(ANALYZE)))
     add('addUserKnob {4 view t %s -STARTLINE M {Passthrough "Shafts Over Env" "Shadow Matte" "Gobo Check" '
-        '"Shafts Matte"}}'
+        '"Shafts Matte" "Lit Share" Comp}}'
         % q("What the main rgb shows. The passes are always written to the shafts and cloudshadow layers; "
-            "Passthrough leaves rgba as the env render."))
-    add('view "Shafts Over Env"')
+            "Comp is the finished look (see the Comp knobs). Passthrough leaves rgba as the env render. Lit Share shows shafts_lit: 1 where the haze is sunlit, 0 under cloud."))
+    add('view Comp')
+    add('addUserKnob {22 layer_breakout l "layer breakout" t %s T %s -STARTLINE}'
+        % (q("Builds the Comp view from this node's layers next to it, as plain nodes: cloud shadow on the sun "
+             "light, haze from shafts_lit, then the shafts. Their values follow the Comp knobs, and a Difference "
+             "at the bottom is black while 'view' is Comp."), q(BREAKOUT)))
     add('addUserKnob {4 viewer_resolution l "viewer resolution" t %s M {Full Half Quarter}}'
         % q("Size the passes are computed at in the Nuke GUI, then scaled back up. Half is about four times "
             "faster than Full. Renders from a terminal or the farm use 'render resolution'."))
@@ -366,6 +465,37 @@ def knob_lines():
     add('shaft_color 1')
     add('addUserKnob {7 shaft_intensity l intensity t %s R 0 10}' % q("Multiplies the beams, rgb and matte."))
     add('shaft_intensity 1')
+    add('addUserKnob {7 soften l "soften (px)" t %s R 0 20}'
+        % q("Blurs the shafts and shafts_lit layers to take out the sampling grain of long rays. 0 is off."))
+    add('soften 4')
+
+    add('addUserKnob {26 comp_divider l Comp}')
+    add('addUserKnob {7 comp_shadow l "cloud shadow" t %s}'
+        % q("How much of the sun light the cloud shadow takes off the env: 0 none, 1 all of it. Use 1 with a sun "
+            "light layer; without one the whole env is darkened, so keep it lower."))
+    add('comp_shadow 0.7')
+    add('addUserKnob {6 use_sun_layer l "sun light layer" t %s +STARTLINE}'
+        % q("On: the cloud shadow only darkens the env's sun light group, picked on the right (the beauty must be "
+            "the sum of its light groups). Off: it darkens the whole env."))
+    add('addUserKnob {41 sun_layer l "" t %s -STARTLINE T SunPick.in1}'
+        % q("Layer of the env render holding the sun's light group."))
+    add('addUserKnob {7 comp_haze l "haze amount" t %s R 0 3}'
+        % q("How strongly the haze veils the env with distance. 0 is no haze: only the shadow and the shafts."))
+    add('comp_haze 1')
+    add('addUserKnob {18 comp_haze_color l "haze color" t %s}' % q("Colour of the haze light."))
+    add('comp_haze_color {0.06 0.13 0.33}')
+    add('addUserKnob {18 comp_haze_falloff l "haze falloff" t %s}'
+        % q("How fast each colour fades with distance: higher fades sooner. Blue above red gives the warm "
+            "near, blue far of aerial perspective."))
+    add('comp_haze_falloff {0.75 1 1.4}')
+    add('addUserKnob {7 comp_haze_shadow l "haze in shadow" t %s R 0 2}'
+        % q("Brightness of the haze where the cloud shades it: below 1 darkens the air between the beams."))
+    add('comp_haze_shadow 0.35')
+    add('addUserKnob {7 comp_haze_lit l "haze in sun" t %s R 0 4}'
+        % q("Brightness of the haze where the sun reaches it."))
+    add('comp_haze_lit 1.5')
+    add('addUserKnob {7 comp_shafts l "shafts" t %s R 0 2}' % q("How much of shafts.rgb is added on top."))
+    add('comp_shafts 1')
 
     add('addUserKnob {26 version_divider l "" +STARTLINE}')
     add('addUserKnob {26 version T "EzCloudShafts v%s"}' % VERSION)
@@ -516,20 +646,51 @@ def nodes(source):
          ["inputs 3"] + blink_node("Pass_Ground", 1, source, "WorkPosMatte")),
         ("Full_Shafts", "Reformat", ["Pass_Shafts"], full_reformat()),
         ("Full_Ground", "Reformat", ["Pass_Ground"], full_reformat()),
-        ("Layer_Shafts", "Copy", ["env", "Full_Shafts"],
+        ("Pass_LitShare", "BlinkScript", ["WorkPosShafts", "CloudsOrNone", "AtmosOrNone"],
+         ["inputs 3"] + blink_node("Pass_LitShare", 2, source, "WorkPosShafts")),
+        ("Full_LitShare", "Reformat", ["Pass_LitShare"], full_reformat()),
+        # Softened, to take the march's sampling grain out of the layers.
+        ("Soft_Shafts", "Blur", ["Full_Shafts"], ["channels rgba", "size {{parent.soften}}"]),
+        ("Soft_LitShare", "Blur", ["Full_LitShare"], ["channels rgba", "size {{parent.soften}}"]),
+        ("Layer_Shafts", "Copy", ["env", "Soft_Shafts"],
          ["inputs 2"] + ["from%d rgba.%s\n  to%d shafts.%s" % (i, c, i, c)
                          for i, c in enumerate(("red", "green", "blue", "alpha"))]),
         ("Layer_CloudShadow", "Copy", ["Layer_Shafts", "Full_Ground"],
          ["inputs 2"] + ["from%d rgba.%s\n  to%d cloudshadow.%s" % (i, c, i, c)
                          for i, c in enumerate(("red", "green", "blue", "alpha"))]),
-        ("ShaftsOver", "Merge2", ["Layer_CloudShadow", "Full_Shafts"], ["inputs 2", "operation plus", "output rgb"]),
+        ("Layer_LitShare", "Copy", ["Layer_CloudShadow", "Soft_LitShare"],
+         ["inputs 2"] + ["from%d rgba.%s\n  to%d shafts_lit.%s" % (i, c, i, c)
+                         for i, c in enumerate(("red", "green", "blue", "alpha"))]),
+        ("ShaftsOver", "Merge2", ["Layer_LitShare", "Soft_Shafts"], ["inputs 2", "operation plus", "output rgb"]),
         ("ShadowView", "Shuffle2", ["Full_Ground"], ["fromInput1 {{0} B}", "in1 rgba", "fromInput2 {{0} B}",
                                                     "mappings " + ALPHA_TO_RGB]),
-        ("ShaftsMatteView", "Shuffle2", ["Full_Shafts"], ["fromInput1 {{0} B}", "in1 rgba", "fromInput2 {{0} B}",
+        ("ShaftsMatteView", "Shuffle2", ["Soft_Shafts"], ["fromInput1 {{0} B}", "in1 rgba", "fromInput2 {{0} B}",
                                                           "mappings " + ALPHA_TO_RGB]),
-        ("ViewOutput", "Switch", ["Layer_CloudShadow", "ShaftsOver", "ShadowView", "Full_Ground", "ShaftsMatteView"],
-         ["inputs 5", "which {{parent.view}}"]),
-        ("MainRGB", "Copy", ["Layer_CloudShadow", "ViewOutput"], ["inputs 2", "channels rgb"]),
+        # The Comp view: cloud shadow on the sun light, haze from shafts_lit, then the shafts.
+        ("SunPick", "Shuffle2", ["env"], ["fromInput1 {{0} B}", "in1 rgba", "fromInput2 {{0} B}",
+                                          "mappings " + shuffle_mappings("rgba")]),
+        ("SunOrBeauty", "Switch", ["env", "SunPick"], ["inputs 2", "which {{parent.use_sun_layer}}"]),
+        ("Comp_ShadowAmount", "Expression", ["Full_Ground"],
+         ['expr%d "(1-a)*parent.comp_shadow"' % i for i in range(3)]),
+        ("Comp_SunLost", "Merge2", ["Comp_ShadowAmount", "SunOrBeauty"],
+         ["inputs 2", "operation multiply", "output rgb"]),
+        ("Comp_Land", "Merge2", ["env", "Comp_SunLost"], ["inputs 2", "operation from", "output rgb"]),
+        ("Comp_Transmittance", "Expression", ["Soft_LitShare"],
+         ['expr%d "pow(clamp(1-a,0,1), parent.comp_haze*parent.comp_haze_falloff.%s)"' % (i, c)
+          for i, c in enumerate("rgb")] + ["expr3 r"]),
+        ("Comp_LandHazed", "Merge2", ["Comp_Land", "Comp_Transmittance"],
+         ["inputs 2", "operation multiply", "output rgb"]),
+        ("Comp_HazeLight", "Expression", ["Comp_Transmittance"],
+         ['expr%d "(1-%s)*parent.comp_haze_color.%s*(parent.comp_haze_shadow+'
+          '(parent.comp_haze_lit-parent.comp_haze_shadow)*a)"' % (i, c, c) for i, c in enumerate("rgb")]),
+        ("Comp_PlusHaze", "Merge2", ["Comp_LandHazed", "Comp_HazeLight"],
+         ["inputs 2", "operation plus", "output rgb"]),
+        ("Comp_PlusShafts", "Merge2", ["Comp_PlusHaze", "Soft_Shafts"],
+         ["inputs 2", "operation plus", "output rgb", "mix {{parent.comp_shafts}}"]),
+        ("ViewOutput", "Switch", ["Layer_LitShare", "ShaftsOver", "ShadowView", "Full_Ground", "ShaftsMatteView",
+                                  "Soft_LitShare", "Comp_PlusShafts"],
+         ["inputs 7", "which {{parent.view}}"]),
+        ("MainRGB", "Copy", ["Layer_LitShare", "ViewOutput"], ["inputs 2", "channels rgb"]),
         ("Output1", "Output", ["MainRGB"], []),
     ]
 

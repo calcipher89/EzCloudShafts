@@ -16,6 +16,9 @@
 //   height over hazeHeight. A step adds its in-scatter when the gobo lets the sun through.
 //   rgb = that in-scatter coloured by the sun (EzAtmosScatter's atmos_haze_sun along the view
 //   ray, or shaftColor), alpha = the same without colour, as a matte.
+// output 2, lit share: the same march; rgb = the share of the ray's haze in-scatter that is
+//   sunlit (1 all lit, 0 all under cloud), whatever the haze amount, to grade the haze up in
+//   the beams and down in the shadowed air. alpha = the haze in-scatter, lit or not (0..1).
 // output 1, ground: rgb = the gobo at the surface from the sun's centre, unsoftened (to check
 //   alignment), alpha = the softened sun visibility, 1 lit, 0 under cloud. Sky is 1.
 //
@@ -253,6 +256,7 @@ local:
     float3 light = sunLight(dir, float2(u, v));
     float transmittance = 1.0f;
     float lit = 0.0f;
+    float haze = 0.0f;
     float tPrev = s;
     int steps = marchSteps > 1 ? marchSteps : 1;
     float jitter = jitterAt(xy, 17.0f);
@@ -268,8 +272,14 @@ local:
       float scatter = transmittance * (1.0f - exp(-sigma));
       float3 sun = jitteredSun(jitterAt(xy, 29.0f + i), jitterAt(xy, 31.0f + i));
       lit += scatter * sunThrough(p, sun);
+      haze += scatter;
       transmittance *= exp(-sigma);
       tPrev = t;
+    }
+    if (output == 2) {
+      float share = haze > 1e-6f ? lit / haze : 1.0f;
+      dst() = float4(share, share, share, haze);
+      return;
     }
     float m = lit * shaftIntensity;
     float3 rgb = light * m;
