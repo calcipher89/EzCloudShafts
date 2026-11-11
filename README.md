@@ -44,7 +44,7 @@ rgba is the env render, or whatever **view** picks. Two layers are added:
 
 **layer breakout** builds the same comp next to the node as plain Shuffles, Expressions and Merges. Their values follow the node's Comp knobs, and a Difference at the bottom is black while **view** is Comp. Use it to re-comp over the full-res image or to change the recipe.
 
-**soften (px)** blurs the shafts and shafts_lit layers to take out the sampling grain of long rays.
+**soften (px)** blurs the shafts and shafts_lit layers to take out the sampling grain of long rays. With **edge aware** on (the default), pixels only average with neighbours at about the same distance from the camera, so beams do not bleed across ridge lines.
 
 ## Speed
 

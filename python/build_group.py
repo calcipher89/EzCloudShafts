@@ -34,6 +34,13 @@ KERNEL = "EzCloudShafts"
 # take the 5th word of its KernelDescription, and update both of these.
 KERNEL_SOURCE_SHA256 = "0b2c04f075fd13c3f3910f69da508a71a7a1c978b30d5da2c1f6096f98f020c6"
 KERNEL_NUKE_HASH = "106d569df343c1e3dbdfc68cf193a02da2cd54eeac79b6c3058db7d2fb0f43da"
+# The soften kernel, pinned the same way.
+SOFTEN_KERNEL = "EzCloudShaftsSoften"
+SOFTEN_SOURCE_SHA256 = "ab1c6cd45fdaa9f53d370f2a251842258cbc01eddfe4d7c824f9181d74c11d38"
+SOFTEN_NUKE_HASH = "45d6b9fcdb620d134d7c21f16e3359242015a6d6f3a519bfa44e366588cd1567"
+SOFTEN_PARAMS = [("radius", "radius", "Float", 1, 4.0), ("edge", "edge", "Float", 1, 0.03),
+                 ("cam_position", "camPosition", "Float", 3, (0, 0, 0))]
+SOFTEN_IMAGES = [("src", "Read", "Random"), ("pos", "Read", "Random"), ("dst", "Write", "Point")]
 GROUP_PATH = os.path.join(ROOT, "groups", "EzCloudShafts_group.nk")
 GIZMO_PATH = os.path.join(ROOT, "gizmos", "EzCloudShafts.gizmo")
 
@@ -102,26 +109,44 @@ def _b64(kind, count, value):
     return base64.b64encode(raw).decode()
 
 
-def kernel_description(source):
+def describe(name, nuke_hash, images, params, local_vars):
     """What a saved BlinkScript node carries about its compiled kernel, so Nuke can make the
     parameter knobs before it compiles the source again."""
-    if hashlib.sha256(source.encode()).hexdigest() != KERNEL_SOURCE_SHA256 or KERNEL_NUKE_HASH == "PENDING":
-        sys.exit("The kernel changed: update KERNEL_NUKE_HASH and KERNEL_SOURCE_SHA256 (see their comment).")
-    parts = ["3", '"%s"' % KERNEL, "iterate", "pixelWise", KERNEL_NUKE_HASH,
-             str(len(IMAGES))]
-    for name, mode, access in IMAGES:
-        parts += ['"%s"' % name, mode, access]
-    parts.append(str(len(PARAMS)))
-    for name, _, kind, count, default in PARAMS:
-        parts += ['"%s"' % name, kind, str(count), _b64(kind, count, default)]
-    parts.append(str(len(PARAMS)))
-    for _, var, _, count, _ in PARAMS:
+    parts = ["3", '"%s"' % name, "iterate", "pixelWise", nuke_hash, str(len(images))]
+    for image, mode, access in images:
+        parts += ['"%s"' % image, mode, access]
+    parts.append(str(len(params)))
+    for pname, _, kind, count, default in params:
+        parts += ['"%s"' % pname, kind, str(count), _b64(kind, count, default)]
+    parts.append(str(len(params)))
+    for _, var, _, count, _ in params:
         parts += ['"%s"' % var, str(count), "1", "Default"]
-    parts.append(str(len(LOCALS)))
-    for var, count in LOCALS:
+    parts.append(str(len(local_vars)))
+    for var, count in local_vars:
         parts += ['"%s"' % var, "Float", str(count), "1", _b64("Float", count, [0.0] * count)]
     return q(" ".join(parts))
 
+
+def kernel_description(source):
+    if hashlib.sha256(source.encode()).hexdigest() != KERNEL_SOURCE_SHA256 or KERNEL_NUKE_HASH == "PENDING":
+        sys.exit("The kernel changed: update KERNEL_NUKE_HASH and KERNEL_SOURCE_SHA256 (see their comment).")
+    return describe(KERNEL, KERNEL_NUKE_HASH, IMAGES, PARAMS, LOCALS)
+
+
+def soften_node():
+    """The edge-aware soften's BlinkScript body."""
+    with open(os.path.join(ROOT, "blink", SOFTEN_KERNEL + ".blink")) as f:
+        source = f.read()
+    if hashlib.sha256(source.encode()).hexdigest() != SOFTEN_SOURCE_SHA256:
+        sys.exit("The soften kernel changed: update SOFTEN_NUKE_HASH and SOFTEN_SOURCE_SHA256.")
+    return ["inputs 2", "recompileCount 1",
+            "KernelDescription " + describe(SOFTEN_KERNEL, SOFTEN_NUKE_HASH, SOFTEN_IMAGES, SOFTEN_PARAMS, []),
+            "kernelSource " + q(source), 'rebuild ""',
+            "%s_radius {{parent.soften}}" % SOFTEN_KERNEL,
+            "%s_edge 0.03" % SOFTEN_KERNEL,
+            "%s_cam_position {{parent.cam_world_matrix.3} {parent.cam_world_matrix.7} {parent.cam_world_matrix.11}}"
+            % SOFTEN_KERNEL,
+            'rebuild_finalise ""']
 
 # ---- Python run from expressions on the group's hidden knobs ------------------------------
 # Each finds its node through any Dots or NoOps in the input.
@@ -475,6 +500,10 @@ def knob_lines():
     add('addUserKnob {7 soften l "soften (px)" t %s R 0 20}'
         % q("Blurs the shafts and shafts_lit layers to take out the sampling grain of long rays. 0 is off."))
     add('soften 4')
+    add('addUserKnob {6 edge_aware l "edge aware" t %s -STARTLINE}'
+        % q("Keeps the softening from blurring beams across ridge lines, using the distance to the camera from "
+            "the position layer. Off is a plain blur, which is a little faster."))
+    add('edge_aware true')
 
     add('addUserKnob {26 comp_divider l Comp}')
     add('addUserKnob {7 comp_shadow l "cloud shadow" t %s}'
@@ -661,8 +690,13 @@ def nodes(source):
          ["inputs 3"] + blink_node("Pass_LitShare", 2, source, "WorkPosShafts")),
         ("Full_LitShare", "Reformat", ["Pass_LitShare"], full_reformat()),
         # Softened, to take the march's sampling grain out of the layers.
-        ("Soft_Shafts", "Blur", ["Full_Shafts"], ["channels rgba", "size {{parent.soften}}"]),
-        ("Soft_LitShare", "Blur", ["Full_LitShare"], ["channels rgba", "size {{parent.soften}}"]),
+        ("Soft_Shafts_Blur", "Blur", ["Full_Shafts"], ["channels rgba", "size {{parent.soften}}"]),
+        ("Soft_Shafts_Edge", "BlinkScript", ["Full_Shafts", "PositionPick"], soften_node()),
+        ("Soft_Shafts", "Switch", ["Soft_Shafts_Blur", "Soft_Shafts_Edge"], ["inputs 2", "which {{parent.edge_aware}}"]),
+        ("Soft_LitShare_Blur", "Blur", ["Full_LitShare"], ["channels rgba", "size {{parent.soften}}"]),
+        ("Soft_LitShare_Edge", "BlinkScript", ["Full_LitShare", "PositionPick"], soften_node()),
+        ("Soft_LitShare", "Switch", ["Soft_LitShare_Blur", "Soft_LitShare_Edge"],
+         ["inputs 2", "which {{parent.edge_aware}}"]),
         ("Layer_Shafts", "Copy", ["env", "Soft_Shafts"],
          ["inputs 2"] + ["from%d rgba.%s\n  to%d shafts.%s" % (i, c, i, c)
                          for i, c in enumerate(("red", "green", "blue", "alpha"))]),

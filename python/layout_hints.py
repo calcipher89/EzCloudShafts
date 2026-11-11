@@ -22,6 +22,8 @@ LABELS = {
     "AtmosOrNone": "atmos plugged in",
     "ViewOutput": "view",
     "SunOrBeauty": "sun light layer",
+    "Soft_Shafts": "edge aware",
+    "Soft_LitShare": "edge aware",
 }
 
 DIRECT = []

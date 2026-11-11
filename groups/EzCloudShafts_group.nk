@@ -71,6 +71,8 @@ Group {
  shaft_intensity 1
  addUserKnob {7 soften l "soften (px)" t "Blurs the shafts and shafts_lit layers to take out the sampling grain of long rays. 0 is off." R 0 20}
  soften 4
+ addUserKnob {6 edge_aware l "edge aware" t "Keeps the softening from blurring beams across ridge lines, using the distance to the camera from the position layer. Off is a plain blur, which is a little faster." -STARTLINE}
+ edge_aware true
  addUserKnob {26 comp_divider l Comp}
  addUserKnob {7 comp_shadow l "cloud shadow" t "How much of the sun light the cloud shadow takes off the env: 0 none, 1 all of it. Use 1 with a sun light layer; without one the whole env is darkened, so keep it lower."}
  comp_shadow 0.7
@@ -125,7 +127,7 @@ Group {
   ypos -60
   bdwidth 1240
   bdheight 238
-  z_order 1
+  z_order 2
  }
  BackdropNode {
   inputs 0
@@ -159,9 +161,9 @@ Group {
   note_font_size 32
   xpos 140
   ypos 753
-  bdwidth 520
-  bdheight 379
-  z_order 2
+  bdwidth 880
+  bdheight 469
+  z_order 1
  }
  BackdropNode {
   inputs 0
@@ -170,7 +172,7 @@ Group {
   label "AOV layers"
   note_font_size 32
   xpos -40
-  ypos 1182
+  ypos 1272
   bdwidth 160
   bdheight 238
   z_order 7
@@ -182,7 +184,7 @@ Group {
   label "Comp"
   note_font_size 32
   xpos 140
-  ypos 1479
+  ypos 1569
   bdwidth 700
   bdheight 619
   z_order 0
@@ -194,7 +196,7 @@ Group {
   label "Views"
   note_font_size 32
   xpos 140
-  ypos 2157
+  ypos 2247
   bdwidth 520
   bdheight 229
   z_order 3
@@ -206,7 +208,7 @@ Group {
   label "View output"
   note_font_size 32
   xpos 140
-  ypos 2445
+  ypos 2535
   bdwidth 160
   bdheight 349
   z_order 6
@@ -218,7 +220,7 @@ Group {
   label "Output"
   note_font_size 32
   xpos -40
-  ypos 2844
+  ypos 2934
   bdwidth 160
   bdheight 178
   z_order 8
@@ -306,21 +308,21 @@ push $N1a700007
 set N1a700008 [stack 0]
 push $N1a700003
  Dot {
-  name LayoutDot22
+  name LayoutDot25
   xpos 806
   ypos 3
  }
 set N1a700009 [stack 0]
 push $N1a700009
  Dot {
-  name LayoutDot23
+  name LayoutDot26
   xpos 806
   ypos 297
  }
 set N1a70000a [stack 0]
 push $N1a70000a
  Dot {
-  name LayoutDot24
+  name LayoutDot27
   xpos 394
   ypos 297
  }
@@ -405,76 +407,69 @@ push $N1a700013
 set N1a700014 [stack 0]
 push $N1a700014
  Dot {
-  name LayoutDot13
-  xpos 266
+  name LayoutDot16
+  xpos 290
   ypos 639
  }
 set N1a700015 [stack 0]
 push $N1a700015
  Dot {
-  name LayoutDot14
-  xpos 266
-  ypos 843
+  name LayoutDot17
+  xpos 290
+  ypos 873
  }
 set N1a700016 [stack 0]
 push $N1a700016
  Dot {
-  name LayoutDot15
+  name LayoutDot18
   xpos 232
-  ypos 843
+  ypos 873
  }
 set N1a700017 [stack 0]
 push $N1a700008
  Dot {
-  name LayoutDot17
+  name LayoutDot20
   xpos 446
   ypos 123
  }
 set N1a700018 [stack 0]
 push $N1a700018
  Dot {
-  name LayoutDot18
+  name LayoutDot21
   xpos 446
-  ypos 873
+  ypos 903
  }
 set N1a700019 [stack 0]
 push $N1a700019
  Dot {
-  name LayoutDot19
-  xpos 412
-  ypos 873
+  name LayoutDot23
+  xpos 196
+  ypos 903
  }
 set N1a70001a [stack 0]
-push $N1a70001a
- Dot {
-  name LayoutDot21
-  xpos 196
-  ypos 873
- }
-set N1a70001b [stack 0]
 push $N1a70000e
  Dot {
-  name LayoutDot25
-  xpos 290
+  name LayoutDot28
+  xpos 314
   ypos 411
+ }
+set N1a70001b [stack 0]
+push $N1a70001b
+ Dot {
+  name LayoutDot29
+  xpos 314
+  ypos 843
  }
 set N1a70001c [stack 0]
 push $N1a70001c
  Dot {
-  name LayoutDot26
-  xpos 290
-  ypos 813
+  name LayoutDot30
+  xpos 214
+  ypos 843
  }
 set N1a70001d [stack 0]
 push $N1a70001d
- Dot {
-  name LayoutDot27
-  xpos 214
-  ypos 813
- }
-set N1a70001e [stack 0]
-push $N1a70001e
-push $N1a70001b
+push $N1a70001a
 push $N1a700017
  BlinkScript {
   inputs 3
@@ -518,40 +513,47 @@ push $N1a700017
   rebuild_finalise ""
   name Pass_Shafts
   xpos 180
-  ypos 954
+  ypos 984
  }
-set N1a70001f [stack 0]
+set N1a70001e [stack 0]
 push $N1a700012
  Dot {
-  name LayoutDot38
+  name LayoutDot41
   xpos 470
   ypos 639
+ }
+set N1a70001f [stack 0]
+push $N1a70001f
+ Dot {
+  name LayoutDot42
+  xpos 470
+  ypos 933
  }
 set N1a700020 [stack 0]
 push $N1a700020
  Dot {
-  name LayoutDot39
-  xpos 470
-  ypos 903
+  name LayoutDot43
+  xpos 556
+  ypos 933
  }
 set N1a700021 [stack 0]
-push $N1a700021
+push $N1a700019
  Dot {
-  name LayoutDot40
-  xpos 376
+  name LayoutDot22
+  xpos 592
   ypos 903
  }
 set N1a700022 [stack 0]
-push $N1a70001d
+push $N1a70001c
  Dot {
-  name LayoutDot28
-  xpos 394
-  ypos 813
+  name LayoutDot31
+  xpos 574
+  ypos 843
  }
 set N1a700023 [stack 0]
 push $N1a700023
-push $N1a70001a
 push $N1a700022
+push $N1a700021
  BlinkScript {
   inputs 3
   recompileCount 1
@@ -593,11 +595,11 @@ push $N1a700022
   EzCloudShafts_seed {{frame}}
   rebuild_finalise ""
   name Pass_Ground
-  xpos 360
-  ypos 954
+  xpos 540
+  ypos 984
  }
 set N1a700024 [stack 0]
-push $N1a70001f
+push $N1a70001e
  Reformat {
   type "to box"
   box_width {{PositionPick.width}}
@@ -607,7 +609,7 @@ push $N1a70001f
   filter cubic
   name Full_Shafts
   xpos 180
-  ypos 1014
+  ypos 1044
  }
 set N1a700025 [stack 0]
 push $N1a700024
@@ -619,29 +621,29 @@ push $N1a700024
   resize distort
   filter cubic
   name Full_Ground
-  xpos 360
-  ypos 1014
+  xpos 540
+  ypos 1044
  }
 set N1a700026 [stack 0]
 push $N1a700016
  Dot {
-  name LayoutDot16
-  xpos 592
-  ypos 843
+  name LayoutDot19
+  xpos 772
+  ypos 873
  }
 set N1a700027 [stack 0]
-push $N1a700019
+push $N1a700022
  Dot {
-  name LayoutDot20
-  xpos 556
-  ypos 873
+  name LayoutDot24
+  xpos 736
+  ypos 903
  }
 set N1a700028 [stack 0]
 push $N1a700023
  Dot {
-  name LayoutDot29
-  xpos 574
-  ypos 813
+  name LayoutDot32
+  xpos 754
+  ypos 843
  }
 set N1a700029 [stack 0]
 push $N1a700029
@@ -688,8 +690,8 @@ push $N1a700027
   EzCloudShafts_seed {{frame}}
   rebuild_finalise ""
   name Pass_LitShare
-  xpos 540
-  ypos 954
+  xpos 720
+  ypos 984
  }
 set N1a70002a [stack 0]
 push $N1a70002a
@@ -701,43 +703,120 @@ push $N1a70002a
   resize distort
   filter cubic
   name Full_LitShare
-  xpos 540
-  ypos 1014
+  xpos 720
+  ypos 1044
  }
 set N1a70002b [stack 0]
 push $N1a700025
  Blur {
   channels rgba
   size {{parent.soften}}
-  name Soft_Shafts
+  name Soft_Shafts_Blur
   xpos 180
-  ypos 1074
+  ypos 1104
  }
 set N1a70002c [stack 0]
+push $N1a700010
+ Dot {
+  name LayoutDot13
+  xpos 266
+  ypos 813
+ }
+set N1a70002d [stack 0]
+push $N1a70002d
+ Dot {
+  name LayoutDot14
+  xpos 394
+  ypos 813
+ }
+set N1a70002e [stack 0]
+push $N1a70002e
+push $N1a700025
+ BlinkScript {
+  inputs 2
+  recompileCount 1
+  KernelDescription "3 \"EzCloudShaftsSoften\" iterate pixelWise 45d6b9fcdb620d134d7c21f16e3359242015a6d6f3a519bfa44e366588cd1567 3 \"src\" Read Random \"pos\" Read Random \"dst\" Write Point 3 \"radius\" Float 1 AACAQA== \"edge\" Float 1 j8L1PA== \"cam_position\" Float 3 AAAAAAAAAAAAAAAAAAAAAA== 3 \"radius\" 1 1 Default \"edge\" 1 1 Default \"camPosition\" 3 1 Default 0"
+  kernelSource "// EzCloudShaftsSoften: takes the march's grain out of the shafts layers without blurring beams\n// across ridge lines. Each pixel averages its neighbours at about the same distance from the\n// camera, so the grain melts while silhouettes stay sharp. Sky (P = 0) only averages with sky.\n//\n// Inputs: `src` the pass to soften, `pos` world position in scene units.\n\nkernel EzCloudShaftsSoften : ImageComputationKernel<ePixelWise>\n\{\n  Image<eRead, eAccessRandom, eEdgeClamped> src;\n  Image<eRead, eAccessRandom, eEdgeClamped> pos;\n  Image<eWrite> dst;\n\nparam:\n  float radius;\n  float edge;\n  float3 camPosition;\n\n  void define()\n  \{\n    defineParam(radius, \"radius\", 4.0f);\n    defineParam(edge, \"edge\", 0.03f);\n    defineParam(camPosition, \"cam_position\", float3(0.0f, 0.0f, 0.0f));\n  \}\n\n  // Distance on a log scale, so \"about the same\" means the same ratio near and far.\n  float key(float4 p)\n  \{\n    if (p.x == 0.0f && p.y == 0.0f && p.z == 0.0f)\n      return 1e6f;\n    return log(length(float3(p.x, p.y, p.z) - camPosition) + 1e-3f);\n  \}\n\n  void process(int2 xy)\n  \{\n    int r = int(radius + 0.5f);\n    if (r <= 0) \{\n      dst() = src(xy.x, xy.y);\n      return;\n    \}\n    float kc = key(pos(xy.x, xy.y));\n    float sigma2 = 2.0f * (radius * 0.6f) * (radius * 0.6f);\n    float4 sum = float4(0.0f);\n    float wsum = 0.0f;\n    for (int dy = -r; dy <= r; dy++) \{\n      for (int dx = -r; dx <= r; dx++) \{\n        float kd = (key(pos(xy.x + dx, xy.y + dy)) - kc) / edge;\n        float w = exp(-(dx * dx + dy * dy) / sigma2 - kd * kd);\n        sum += src(xy.x + dx, xy.y + dy) * w;\n        wsum += w;\n      \}\n    \}\n    dst() = sum / wsum;\n  \}\n\};"
+  rebuild ""
+  EzCloudShaftsSoften_radius {{parent.soften}}
+  EzCloudShaftsSoften_edge 0.03
+  EzCloudShaftsSoften_cam_position {{parent.cam_world_matrix.3} {parent.cam_world_matrix.7} {parent.cam_world_matrix.11}}
+  rebuild_finalise ""
+  name Soft_Shafts_Edge
+  xpos 360
+  ypos 1104
+ }
+set N1a70002f [stack 0]
+push $N1a70002f
+push $N1a70002c
+ Switch {
+  inputs 2
+  which {{parent.edge_aware}}
+  name Soft_Shafts
+  xpos 180
+  ypos 1164
+  label "edge aware"
+ }
+set N1a700030 [stack 0]
 push $N1a70002b
  Blur {
   channels rgba
   size {{parent.soften}}
-  name Soft_LitShare
-  xpos 540
-  ypos 1074
+  name Soft_LitShare_Blur
+  xpos 720
+  ypos 1104
  }
-set N1a70002d [stack 0]
-push $N1a70002c
- Dot {
-  name LayoutDot30
-  xpos 290
-  ypos 1077
- }
-set N1a70002e [stack 0]
+set N1a700031 [stack 0]
 push $N1a70002e
  Dot {
-  name LayoutDot31
-  xpos 290
-  ypos 1245
+  name LayoutDot15
+  xpos 934
+  ypos 813
  }
-set N1a70002f [stack 0]
-push $N1a70002f
+set N1a700032 [stack 0]
+push $N1a700032
+push $N1a70002b
+ BlinkScript {
+  inputs 2
+  recompileCount 1
+  KernelDescription "3 \"EzCloudShaftsSoften\" iterate pixelWise 45d6b9fcdb620d134d7c21f16e3359242015a6d6f3a519bfa44e366588cd1567 3 \"src\" Read Random \"pos\" Read Random \"dst\" Write Point 3 \"radius\" Float 1 AACAQA== \"edge\" Float 1 j8L1PA== \"cam_position\" Float 3 AAAAAAAAAAAAAAAAAAAAAA== 3 \"radius\" 1 1 Default \"edge\" 1 1 Default \"camPosition\" 3 1 Default 0"
+  kernelSource "// EzCloudShaftsSoften: takes the march's grain out of the shafts layers without blurring beams\n// across ridge lines. Each pixel averages its neighbours at about the same distance from the\n// camera, so the grain melts while silhouettes stay sharp. Sky (P = 0) only averages with sky.\n//\n// Inputs: `src` the pass to soften, `pos` world position in scene units.\n\nkernel EzCloudShaftsSoften : ImageComputationKernel<ePixelWise>\n\{\n  Image<eRead, eAccessRandom, eEdgeClamped> src;\n  Image<eRead, eAccessRandom, eEdgeClamped> pos;\n  Image<eWrite> dst;\n\nparam:\n  float radius;\n  float edge;\n  float3 camPosition;\n\n  void define()\n  \{\n    defineParam(radius, \"radius\", 4.0f);\n    defineParam(edge, \"edge\", 0.03f);\n    defineParam(camPosition, \"cam_position\", float3(0.0f, 0.0f, 0.0f));\n  \}\n\n  // Distance on a log scale, so \"about the same\" means the same ratio near and far.\n  float key(float4 p)\n  \{\n    if (p.x == 0.0f && p.y == 0.0f && p.z == 0.0f)\n      return 1e6f;\n    return log(length(float3(p.x, p.y, p.z) - camPosition) + 1e-3f);\n  \}\n\n  void process(int2 xy)\n  \{\n    int r = int(radius + 0.5f);\n    if (r <= 0) \{\n      dst() = src(xy.x, xy.y);\n      return;\n    \}\n    float kc = key(pos(xy.x, xy.y));\n    float sigma2 = 2.0f * (radius * 0.6f) * (radius * 0.6f);\n    float4 sum = float4(0.0f);\n    float wsum = 0.0f;\n    for (int dy = -r; dy <= r; dy++) \{\n      for (int dx = -r; dx <= r; dx++) \{\n        float kd = (key(pos(xy.x + dx, xy.y + dy)) - kc) / edge;\n        float w = exp(-(dx * dx + dy * dy) / sigma2 - kd * kd);\n        sum += src(xy.x + dx, xy.y + dy) * w;\n        wsum += w;\n      \}\n    \}\n    dst() = sum / wsum;\n  \}\n\};"
+  rebuild ""
+  EzCloudShaftsSoften_radius {{parent.soften}}
+  EzCloudShaftsSoften_edge 0.03
+  EzCloudShaftsSoften_cam_position {{parent.cam_world_matrix.3} {parent.cam_world_matrix.7} {parent.cam_world_matrix.11}}
+  rebuild_finalise ""
+  name Soft_LitShare_Edge
+  xpos 900
+  ypos 1104
+ }
+set N1a700033 [stack 0]
+push $N1a700033
+push $N1a700031
+ Switch {
+  inputs 2
+  which {{parent.edge_aware}}
+  name Soft_LitShare
+  xpos 720
+  ypos 1164
+  label "edge aware"
+ }
+set N1a700034 [stack 0]
+push $N1a700030
+ Dot {
+  name LayoutDot33
+  xpos 290
+  ypos 1167
+ }
+set N1a700035 [stack 0]
+push $N1a700035
+ Dot {
+  name LayoutDot34
+  xpos 290
+  ypos 1335
+ }
+set N1a700036 [stack 0]
+push $N1a700036
 push $N1a700000
  Copy {
   inputs 2
@@ -751,25 +830,25 @@ push $N1a700000
   to3 shafts.alpha
   name Layer_Shafts
   xpos 0
-  ypos 1242
+  ypos 1332
  }
-set N1a700030 [stack 0]
+set N1a700037 [stack 0]
 push $N1a700026
  Dot {
-  name LayoutDot41
-  xpos 446
-  ypos 1017
+  name LayoutDot44
+  xpos 626
+  ypos 1047
  }
-set N1a700031 [stack 0]
-push $N1a700031
+set N1a700038 [stack 0]
+push $N1a700038
  Dot {
-  name LayoutDot42
-  xpos 446
-  ypos 1305
+  name LayoutDot45
+  xpos 626
+  ypos 1395
  }
-set N1a700032 [stack 0]
-push $N1a700032
-push $N1a700030
+set N1a700039 [stack 0]
+push $N1a700039
+push $N1a700037
  Copy {
   inputs 2
   from0 rgba.red
@@ -782,32 +861,32 @@ push $N1a700030
   to3 cloudshadow.alpha
   name Layer_CloudShadow
   xpos 0
-  ypos 1302
+  ypos 1392
  }
-set N1a700033 [stack 0]
-push $N1a70002d
- Dot {
-  name LayoutDot49
-  xpos 626
-  ypos 1077
- }
-set N1a700034 [stack 0]
+set N1a70003a [stack 0]
 push $N1a700034
  Dot {
-  name LayoutDot50
-  xpos 626
-  ypos 1344
+  name LayoutDot52
+  xpos 806
+  ypos 1167
  }
-set N1a700035 [stack 0]
-push $N1a700035
+set N1a70003b [stack 0]
+push $N1a70003b
  Dot {
-  name LayoutDot51
-  xpos 124
-  ypos 1344
+  name LayoutDot53
+  xpos 806
+  ypos 1434
  }
-set N1a700036 [stack 0]
-push $N1a700036
-push $N1a700033
+set N1a70003c [stack 0]
+push $N1a70003c
+ Dot {
+  name LayoutDot54
+  xpos 124
+  ypos 1434
+ }
+set N1a70003d [stack 0]
+push $N1a70003d
+push $N1a70003a
  Copy {
   inputs 2
   from0 rgba.red
@@ -820,138 +899,81 @@ push $N1a700033
   to3 shafts_lit.alpha
   name Layer_LitShare
   xpos 0
-  ypos 1362
+  ypos 1452
  }
-set N1a700037 [stack 0]
-push $N1a700037
+set N1a70003e [stack 0]
+push $N1a70003e
  Dot {
-  name LayoutDot56
+  name LayoutDot59
   xpos 110
-  ypos 1365
+  ypos 1455
  }
-set N1a700038 [stack 0]
-push $N1a700038
+set N1a70003f [stack 0]
+push $N1a70003f
  Dot {
-  name LayoutDot57
+  name LayoutDot60
   xpos 110
-  ypos 2217
+  ypos 2307
  }
-set N1a700039 [stack 0]
-push $N1a700039
+set N1a700040 [stack 0]
+push $N1a700040
  Dot {
-  name LayoutDot58
+  name LayoutDot61
   xpos 214
-  ypos 2217
+  ypos 2307
  }
-set N1a70003a [stack 0]
-push $N1a70002f
- Dot {
-  name LayoutDot32
-  xpos 290
-  ypos 1569
- }
-set N1a70003b [stack 0]
-push $N1a70003b
+set N1a700041 [stack 0]
+push $N1a700036
  Dot {
   name LayoutDot35
   xpos 290
-  ypos 2247
+  ypos 1659
  }
-set N1a70003c [stack 0]
-push $N1a70003c
+set N1a700042 [stack 0]
+push $N1a700042
  Dot {
-  name LayoutDot36
-  xpos 232
-  ypos 2247
+  name LayoutDot38
+  xpos 290
+  ypos 2337
  }
-set N1a70003d [stack 0]
-push $N1a70003d
-push $N1a70003a
+set N1a700043 [stack 0]
+push $N1a700043
+ Dot {
+  name LayoutDot39
+  xpos 232
+  ypos 2337
+ }
+set N1a700044 [stack 0]
+push $N1a700044
+push $N1a700041
  Merge2 {
   inputs 2
   operation plus
   output rgb
   name ShaftsOver
   xpos 180
-  ypos 2328
- }
-set N1a70003e [stack 0]
-push $N1a700032
- Dot {
-  name LayoutDot43
-  xpos 446
-  ypos 1599
- }
-set N1a70003f [stack 0]
-push $N1a70003f
- Dot {
-  name LayoutDot45
-  xpos 446
-  ypos 2277
- }
-set N1a700040 [stack 0]
-push $N1a700040
- Dot {
-  name LayoutDot46
-  xpos 394
-  ypos 2277
- }
-set N1a700041 [stack 0]
-push $N1a700041
- Shuffle2 {
-  fromInput1 {{0} B}
-  in1 rgba
-  fromInput2 {{0} B}
-  mappings "4 rgba.alpha 0 3 rgba.red 0 0 rgba.alpha 0 3 rgba.green 0 1 rgba.alpha 0 3 rgba.blue 0 2 rgba.alpha 0 3 rgba.alpha 0 3"
-  name ShadowView
-  xpos 360
-  ypos 2328
- }
-set N1a700042 [stack 0]
-push $N1a70003c
- Dot {
-  name LayoutDot37
-  xpos 574
-  ypos 2247
- }
-set N1a700043 [stack 0]
-push $N1a700043
- Shuffle2 {
-  fromInput1 {{0} B}
-  in1 rgba
-  fromInput2 {{0} B}
-  mappings "4 rgba.alpha 0 3 rgba.red 0 0 rgba.alpha 0 3 rgba.green 0 1 rgba.alpha 0 3 rgba.blue 0 2 rgba.alpha 0 3 rgba.alpha 0 3"
-  name ShaftsMatteView
-  xpos 540
-  ypos 2328
- }
-set N1a700044 [stack 0]
-push $N1a700000
- Dot {
-  name LayoutDot3
-  xpos 86
-  ypos 3
+  ypos 2418
  }
 set N1a700045 [stack 0]
-push $N1a700045
+push $N1a700039
  Dot {
-  name LayoutDot4
-  xpos 86
-  ypos 1539
+  name LayoutDot46
+  xpos 626
+  ypos 1689
  }
 set N1a700046 [stack 0]
 push $N1a700046
  Dot {
-  name LayoutDot5
-  xpos 266
-  ypos 1539
+  name LayoutDot48
+  xpos 626
+  ypos 2367
  }
 set N1a700047 [stack 0]
 push $N1a700047
  Dot {
-  name LayoutDot7
+  name LayoutDot49
   xpos 394
-  ypos 1539
+  ypos 2367
  }
 set N1a700048 [stack 0]
 push $N1a700048
@@ -959,98 +981,155 @@ push $N1a700048
   fromInput1 {{0} B}
   in1 rgba
   fromInput2 {{0} B}
+  mappings "4 rgba.alpha 0 3 rgba.red 0 0 rgba.alpha 0 3 rgba.green 0 1 rgba.alpha 0 3 rgba.blue 0 2 rgba.alpha 0 3 rgba.alpha 0 3"
+  name ShadowView
+  xpos 360
+  ypos 2418
+ }
+set N1a700049 [stack 0]
+push $N1a700043
+ Dot {
+  name LayoutDot40
+  xpos 574
+  ypos 2337
+ }
+set N1a70004a [stack 0]
+push $N1a70004a
+ Shuffle2 {
+  fromInput1 {{0} B}
+  in1 rgba
+  fromInput2 {{0} B}
+  mappings "4 rgba.alpha 0 3 rgba.red 0 0 rgba.alpha 0 3 rgba.green 0 1 rgba.alpha 0 3 rgba.blue 0 2 rgba.alpha 0 3 rgba.alpha 0 3"
+  name ShaftsMatteView
+  xpos 540
+  ypos 2418
+ }
+set N1a70004b [stack 0]
+push $N1a700000
+ Dot {
+  name LayoutDot3
+  xpos 86
+  ypos 3
+ }
+set N1a70004c [stack 0]
+push $N1a70004c
+ Dot {
+  name LayoutDot4
+  xpos 86
+  ypos 1629
+ }
+set N1a70004d [stack 0]
+push $N1a70004d
+ Dot {
+  name LayoutDot5
+  xpos 266
+  ypos 1629
+ }
+set N1a70004e [stack 0]
+push $N1a70004e
+ Dot {
+  name LayoutDot7
+  xpos 394
+  ypos 1629
+ }
+set N1a70004f [stack 0]
+push $N1a70004f
+ Shuffle2 {
+  fromInput1 {{0} B}
+  in1 rgba
+  fromInput2 {{0} B}
   mappings "4 rgba.red 0 0 rgba.red 0 0 rgba.green 0 1 rgba.green 0 1 rgba.blue 0 2 rgba.blue 0 2 black -1 -1 rgba.alpha 0 3"
   name SunPick
   xpos 360
-  ypos 1680
+  ypos 1770
  }
-set N1a700049 [stack 0]
-push $N1a700048
+set N1a700050 [stack 0]
+push $N1a70004f
  Dot {
   name LayoutDot8
   xpos 574
-  ypos 1539
+  ypos 1629
  }
-set N1a70004a [stack 0]
-push $N1a700049
-push $N1a70004a
+set N1a700051 [stack 0]
+push $N1a700050
+push $N1a700051
  Switch {
   inputs 2
   which {{parent.use_sun_layer}}
   name SunOrBeauty
   xpos 540
-  ypos 1740
+  ypos 1830
   label "sun light layer"
  }
-set N1a70004b [stack 0]
-push $N1a70003f
+set N1a700052 [stack 0]
+push $N1a700046
  Dot {
-  name LayoutDot44
+  name LayoutDot47
   xpos 214
-  ypos 1599
+  ypos 1689
  }
-set N1a70004c [stack 0]
-push $N1a70004c
+set N1a700053 [stack 0]
+push $N1a700053
  Expression {
   expr0 "(1-a)*parent.comp_shadow"
   expr1 "(1-a)*parent.comp_shadow"
   expr2 "(1-a)*parent.comp_shadow"
   name Comp_ShadowAmount
   xpos 180
-  ypos 1680
+  ypos 1770
  }
-set N1a70004d [stack 0]
-push $N1a70004b
+set N1a700054 [stack 0]
+push $N1a700052
  Dot {
   name LayoutDot1
   xpos 226
-  ypos 1743
+  ypos 1833
  }
-set N1a70004e [stack 0]
-push $N1a70004e
-push $N1a70004d
+set N1a700055 [stack 0]
+push $N1a700055
+push $N1a700054
  Merge2 {
   inputs 2
   operation multiply
   output rgb
   name Comp_SunLost
   xpos 180
-  ypos 1800
+  ypos 1890
  }
-set N1a70004f [stack 0]
-push $N1a700047
+set N1a700056 [stack 0]
+push $N1a70004e
  Dot {
   name LayoutDot6
   xpos 266
-  ypos 1863
+  ypos 1953
  }
-set N1a700050 [stack 0]
-push $N1a70004f
-push $N1a700050
+set N1a700057 [stack 0]
+push $N1a700056
+push $N1a700057
  Merge2 {
   inputs 2
   operation from
   output rgb
   name Comp_Land
   xpos 360
-  ypos 1860
+  ypos 1950
  }
-set N1a700051 [stack 0]
-push $N1a700035
+set N1a700058 [stack 0]
+push $N1a70003c
  Dot {
-  name LayoutDot52
-  xpos 626
-  ypos 1629
+  name LayoutDot55
+  xpos 806
+  ypos 1719
  }
-set N1a700052 [stack 0]
-push $N1a700052
+set N1a700059 [stack 0]
+push $N1a700059
  Dot {
-  name LayoutDot53
+  name LayoutDot56
   xpos 754
-  ypos 1629
+  ypos 1719
  }
-set N1a700053 [stack 0]
-push $N1a700053
+set N1a70005a [stack 0]
+push $N1a70005a
  Expression {
   expr0 "pow(clamp(1-a,0,1), parent.comp_haze*parent.comp_haze_falloff.r)"
   expr1 "pow(clamp(1-a,0,1), parent.comp_haze*parent.comp_haze_falloff.g)"
@@ -1058,78 +1137,78 @@ push $N1a700053
   expr3 r
   name Comp_Transmittance
   xpos 720
-  ypos 1680
+  ypos 1770
  }
-set N1a700054 [stack 0]
-push $N1a700054
+set N1a70005b [stack 0]
+push $N1a70005b
  Dot {
-  name LayoutDot70
-  xpos 806
-  ypos 1683
+  name LayoutDot73
+  xpos 830
+  ypos 1773
  }
-set N1a700055 [stack 0]
-push $N1a700055
+set N1a70005c [stack 0]
+push $N1a70005c
  Dot {
-  name LayoutDot71
-  xpos 806
-  ypos 1923
+  name LayoutDot74
+  xpos 830
+  ypos 2013
  }
-set N1a700056 [stack 0]
-push $N1a700056
-push $N1a700051
+set N1a70005d [stack 0]
+push $N1a70005d
+push $N1a700058
  Merge2 {
   inputs 2
   operation multiply
   output rgb
   name Comp_LandHazed
   xpos 360
-  ypos 1920
+  ypos 2010
  }
-set N1a700057 [stack 0]
-push $N1a700054
+set N1a70005e [stack 0]
+push $N1a70005b
  Expression {
   expr0 "(1-r)*parent.comp_haze_color.r*(parent.comp_haze_shadow+(parent.comp_haze_lit-parent.comp_haze_shadow)*a)"
   expr1 "(1-g)*parent.comp_haze_color.g*(parent.comp_haze_shadow+(parent.comp_haze_lit-parent.comp_haze_shadow)*a)"
   expr2 "(1-b)*parent.comp_haze_color.b*(parent.comp_haze_shadow+(parent.comp_haze_lit-parent.comp_haze_shadow)*a)"
   name Comp_HazeLight
   xpos 720
-  ypos 1740
+  ypos 1830
  }
-set N1a700058 [stack 0]
-push $N1a700058
+set N1a70005f [stack 0]
+push $N1a70005f
  Dot {
   name LayoutDot2
   xpos 754
-  ypos 1983
+  ypos 2073
  }
-set N1a700059 [stack 0]
-push $N1a700059
-push $N1a700057
+set N1a700060 [stack 0]
+push $N1a700060
+push $N1a70005e
  Merge2 {
   inputs 2
   operation plus
   output rgb
   name Comp_PlusHaze
   xpos 360
-  ypos 1980
+  ypos 2070
  }
-set N1a70005a [stack 0]
-push $N1a70003b
+set N1a700061 [stack 0]
+push $N1a700042
  Dot {
-  name LayoutDot33
+  name LayoutDot36
   xpos 314
-  ypos 1569
+  ypos 1659
  }
-set N1a70005b [stack 0]
-push $N1a70005b
+set N1a700062 [stack 0]
+push $N1a700062
  Dot {
-  name LayoutDot34
+  name LayoutDot37
   xpos 314
-  ypos 2043
+  ypos 2133
  }
-set N1a70005c [stack 0]
-push $N1a70005c
-push $N1a70005a
+set N1a700063 [stack 0]
+push $N1a700063
+push $N1a700061
  Merge2 {
   inputs 2
   operation plus
@@ -1137,180 +1216,180 @@ push $N1a70005a
   mix {{parent.comp_shafts}}
   name Comp_PlusShafts
   xpos 360
-  ypos 2040
- }
-set N1a70005d [stack 0]
-push $N1a700039
- Dot {
-  name LayoutDot59
-  xpos 110
-  ypos 2505
- }
-set N1a70005e [stack 0]
-push $N1a70005e
- Dot {
-  name LayoutDot60
-  xpos 214
-  ypos 2505
- }
-set N1a70005f [stack 0]
-push $N1a70003e
- Dot {
-  name LayoutDot61
-  xpos 266
-  ypos 2331
- }
-set N1a700060 [stack 0]
-push $N1a700060
- Dot {
-  name LayoutDot62
-  xpos 266
-  ypos 2535
- }
-set N1a700061 [stack 0]
-push $N1a700061
- Dot {
-  name LayoutDot63
-  xpos 232
-  ypos 2535
- }
-set N1a700062 [stack 0]
-push $N1a700042
- Dot {
-  name LayoutDot64
-  xpos 470
-  ypos 2331
- }
-set N1a700063 [stack 0]
-push $N1a700063
- Dot {
-  name LayoutDot65
-  xpos 470
-  ypos 2625
+  ypos 2130
  }
 set N1a700064 [stack 0]
-push $N1a700064
- Dot {
-  name LayoutDot66
-  xpos 178
-  ypos 2625
- }
-set N1a700065 [stack 0]
 push $N1a700040
  Dot {
-  name LayoutDot47
-  xpos 446
-  ypos 2565
+  name LayoutDot62
+  xpos 110
+  ypos 2595
+ }
+set N1a700065 [stack 0]
+push $N1a700065
+ Dot {
+  name LayoutDot63
+  xpos 214
+  ypos 2595
  }
 set N1a700066 [stack 0]
-push $N1a700066
+push $N1a700045
  Dot {
-  name LayoutDot48
-  xpos 196
-  ypos 2565
+  name LayoutDot64
+  xpos 266
+  ypos 2421
  }
 set N1a700067 [stack 0]
-push $N1a700044
+push $N1a700067
  Dot {
-  name LayoutDot67
-  xpos 650
-  ypos 2331
+  name LayoutDot65
+  xpos 266
+  ypos 2625
  }
 set N1a700068 [stack 0]
 push $N1a700068
  Dot {
-  name LayoutDot68
-  xpos 650
-  ypos 2685
+  name LayoutDot66
+  xpos 232
+  ypos 2625
  }
 set N1a700069 [stack 0]
-push $N1a700069
+push $N1a700049
  Dot {
-  name LayoutDot69
-  xpos 160
-  ypos 2685
+  name LayoutDot67
+  xpos 446
+  ypos 2421
  }
 set N1a70006a [stack 0]
-push $N1a700052
+push $N1a70006a
  Dot {
-  name LayoutDot54
-  xpos 626
-  ypos 2655
+  name LayoutDot68
+  xpos 446
+  ypos 2685
  }
 set N1a70006b [stack 0]
 push $N1a70006b
  Dot {
-  name LayoutDot55
-  xpos 268
-  ypos 2655
+  name LayoutDot69
+  xpos 250
+  ypos 2685
  }
 set N1a70006c [stack 0]
-push $N1a70005d
+push $N1a700047
  Dot {
-  name LayoutDot72
-  xpos 494
-  ypos 2043
+  name LayoutDot50
+  xpos 626
+  ypos 2715
  }
 set N1a70006d [stack 0]
 push $N1a70006d
  Dot {
-  name LayoutDot73
-  xpos 494
-  ypos 2595
+  name LayoutDot51
+  xpos 178
+  ypos 2715
  }
 set N1a70006e [stack 0]
-push $N1a70006e
+push $N1a70004b
  Dot {
-  name LayoutDot74
-  xpos 250
-  ypos 2595
+  name LayoutDot70
+  xpos 650
+  ypos 2421
  }
 set N1a70006f [stack 0]
 push $N1a70006f
+ Dot {
+  name LayoutDot71
+  xpos 650
+  ypos 2745
+ }
+set N1a700070 [stack 0]
+push $N1a700070
+ Dot {
+  name LayoutDot72
+  xpos 268
+  ypos 2745
+ }
+set N1a700071 [stack 0]
+push $N1a700059
+ Dot {
+  name LayoutDot57
+  xpos 806
+  ypos 2775
+ }
+set N1a700072 [stack 0]
+push $N1a700072
+ Dot {
+  name LayoutDot58
+  xpos 160
+  ypos 2775
+ }
+set N1a700073 [stack 0]
+push $N1a700064
+ Dot {
+  name LayoutDot75
+  xpos 470
+  ypos 2133
+ }
+set N1a700074 [stack 0]
+push $N1a700074
+ Dot {
+  name LayoutDot76
+  xpos 470
+  ypos 2655
+ }
+set N1a700075 [stack 0]
+push $N1a700075
+ Dot {
+  name LayoutDot77
+  xpos 196
+  ypos 2655
+ }
+set N1a700076 [stack 0]
+push $N1a700076
+push $N1a700073
+push $N1a700071
+push $N1a70006e
 push $N1a70006c
-push $N1a70006a
-push $N1a700067
-push $N1a700065
-push $N1a700062
-push $N1a70005f
+push $N1a700069
+push $N1a700066
  Switch {
   inputs 7
   which {{parent.view}}
   name ViewOutput
   xpos 180
-  ypos 2736
+  ypos 2826
   label "view"
  }
-set N1a700070 [stack 0]
-push $N1a700070
+set N1a700077 [stack 0]
+push $N1a700077
  Dot {
-  name LayoutDot75
+  name LayoutDot78
   xpos 266
-  ypos 2739
+  ypos 2829
  }
-set N1a700071 [stack 0]
-push $N1a700071
+set N1a700078 [stack 0]
+push $N1a700078
  Dot {
-  name LayoutDot76
+  name LayoutDot79
   xpos 266
-  ypos 2907
+  ypos 2997
  }
-set N1a700072 [stack 0]
-push $N1a700072
-push $N1a700037
+set N1a700079 [stack 0]
+push $N1a700079
+push $N1a70003e
  Copy {
   inputs 2
   channels rgb
   name MainRGB
   xpos 0
-  ypos 2904
+  ypos 2994
  }
-set N1a700073 [stack 0]
-push $N1a700073
+set N1a70007a [stack 0]
+push $N1a70007a
  Output {
   name Output1
   xpos 0
-  ypos 2964
+  ypos 3054
  }
-set N1a700074 [stack 0]
+set N1a70007b [stack 0]
 end_group
