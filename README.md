@@ -67,6 +67,8 @@ pixels). It also reports how much of the ground the gobo reaches.
 Units are metres inside. **units to metres** turns the scene's units into metres (0.1 for
 decimetres), and Analyze copies it from EzAtmosScatter.
 
+**gap contrast** and **gap threshold** apply levels to the clouds' alpha before it is used, so thin or soft cloud renders give crisper beams. The defaults (1 and 0.5) change nothing, and the render itself isn't touched. Gobo Check shows the effect.
+
 ### Coverage: what the camera doesn't see can't cast
 
 The gobo only knows the clouds the camera sees. The cloud that shades a patch of ground lies

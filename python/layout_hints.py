@@ -3,7 +3,7 @@ and labels on the Switches."""
 
 MODULES = [
     # (Backdrop label, tile_color, node names it holds as a regex), top to bottom
-    ("Inputs", 0x4a5a6aff, r"env|clouds|camera|atmos|sun|PositionPick|NoClouds|CloudsOrNone"),
+    ("Inputs", 0x4a5a6aff, r"env|clouds|camera|atmos|sun|PositionPick|NoClouds|CloudsOrNone|GoboLevels"),
     ("Sun colour from atmos", 0x7a6a3aff, r"AtmosSunPick|NoAtmos|AtmosOrNone"),
     ("Work resolution", 0x4a5a6aff, r"WorkPos.*"),
     ("Gobo passes", 0x3a5a4aff, r"Pass_.*|Full_.*|Soft_.*"),

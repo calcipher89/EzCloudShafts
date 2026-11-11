@@ -421,6 +421,13 @@ def knob_lines():
     add('addUserKnob {7 cloud_density l "cloud density" t %s R 0 3}'
         % q("Multiplies the clouds alpha: above 1 thin cloud blocks more sun."))
     add('cloud_density 1')
+    add('addUserKnob {7 gap_contrast l "gap contrast" t %s R 0.1 10}'
+        % q("Levels on the clouds' alpha before it is used as the gobo. Above 1 thin, soft clouds become more "
+            "clearly solid or clear, for crisper beams. 1 with threshold 0.5 changes nothing."))
+    add('gap_contrast 1')
+    add('addUserKnob {7 gap_threshold l "gap threshold" t %s}'
+        % q("The alpha that stays at 0.5 under 'gap contrast'. Higher opens more gaps; lower closes them."))
+    add('gap_threshold 0.5')
     add('addUserKnob {7 shadow_strength l "shadow strength" t %s}'
         % q("How much sunlight the cloud takes away: 1 is all of it."))
     add('shadow_strength 1')
@@ -632,6 +639,10 @@ def nodes(source):
                                                "mappings " + shuffle_mappings("P")]),
         ("NoClouds", "Constant", [], ["inputs 0", "format " + tiny]),
         ("CloudsOrNone", "Switch", ["NoClouds", "clouds"], ["inputs 2", 'which {{"\\[exists parent.input1]"}}']),
+        # Levels on the gobo: the render itself isn't touched, only what the passes read.
+        ("GoboLevels", "Expression", ["CloudsOrNone"],
+         ["channel0 none", "channel1 none", "channel2 none", "channel3 alpha",
+          'expr3 "clamp(0.5+(a-parent.gap_threshold)*parent.gap_contrast,0,1)"']),
         ("AtmosSunPick", "Shuffle2", ["atmos"], ["fromInput1 {{0} B}", "in1 atmos_haze_sun", "fromInput2 {{0} B}",
                                                  "mappings " + shuffle_mappings("atmos_haze_sun")]),
         ("NoAtmos", "Constant", [], ["inputs 0", "format " + tiny]),
@@ -640,13 +651,13 @@ def nodes(source):
         # edge), then are scaled back up to the env's format.
         ("WorkPosMatte", "Reformat", ["PositionPick"], work_reformat("parent.matte_scale")),
         ("WorkPosShafts", "Reformat", ["PositionPick"], work_reformat("parent.shafts_scale")),
-        ("Pass_Shafts", "BlinkScript", ["WorkPosShafts", "CloudsOrNone", "AtmosOrNone"],
+        ("Pass_Shafts", "BlinkScript", ["WorkPosShafts", "GoboLevels", "AtmosOrNone"],
          ["inputs 3"] + blink_node("Pass_Shafts", 0, source, "WorkPosShafts")),
-        ("Pass_Ground", "BlinkScript", ["WorkPosMatte", "CloudsOrNone", "AtmosOrNone"],
+        ("Pass_Ground", "BlinkScript", ["WorkPosMatte", "GoboLevels", "AtmosOrNone"],
          ["inputs 3"] + blink_node("Pass_Ground", 1, source, "WorkPosMatte")),
         ("Full_Shafts", "Reformat", ["Pass_Shafts"], full_reformat()),
         ("Full_Ground", "Reformat", ["Pass_Ground"], full_reformat()),
-        ("Pass_LitShare", "BlinkScript", ["WorkPosShafts", "CloudsOrNone", "AtmosOrNone"],
+        ("Pass_LitShare", "BlinkScript", ["WorkPosShafts", "GoboLevels", "AtmosOrNone"],
          ["inputs 3"] + blink_node("Pass_LitShare", 2, source, "WorkPosShafts")),
         ("Full_LitShare", "Reformat", ["Pass_LitShare"], full_reformat()),
         # Softened, to take the march's sampling grain out of the layers.
