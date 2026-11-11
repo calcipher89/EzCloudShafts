@@ -1,0 +1,271 @@
+// EzCloudShafts: sun shafts and a ground cloud-shadow matte from a CG clouds render used as a
+// gobo, seen through the shot camera.
+//
+// The clouds are treated as a sheet at cloudHeight (metres, +Y up). For a world point p below
+// it, the ray towards the sun meets the sheet at
+//
+//   hit = p + sun * (cloudHeight - p.y) / sun.y
+//
+// and the hit is projected through the shot camera into the clouds image. Its alpha is how
+// much of the sun the cloud stops there: lit = 1 - shadowStrength * clamp(alpha * cloudDensity).
+// The sun direction is spread over a small cone (penumbra) and averaged, so shadow edges soften
+// with the distance to the cloud, as real ones do.
+//
+// output 0, shafts: each camera ray is stepped from the lens to the surface (or to the cloud
+//   sheet, for sky), through haze of density shaftDensity at camera height that thins with
+//   height over hazeHeight. A step adds its in-scatter when the gobo lets the sun through.
+//   rgb = that in-scatter coloured by the sun (EzAtmosScatter's atmos_haze_sun along the view
+//   ray, or shaftColor), alpha = the same without colour, as a matte.
+// output 1, ground: rgb = the gobo at the surface from the sun's centre, unsoftened (to check
+//   alignment), alpha = the softened sun visibility, 1 lit, 0 under cloud.
+//
+// Inputs: `pos` world position (P) in scene units in rgb, 0 for sky. `clouds` the flattened
+// clouds render, alpha = opacity, in the shot camera's view (overscan in its bbox, or baked
+// into a bigger format: cloudsOverscan). `envSun` EzAtmosScatter's atmos_haze_sun, lat-long
+// (or the camera's view with envScreen). Scene units turn into metres with sceneScale.
+
+kernel EzCloudShafts : ImageComputationKernel<ePixelWise>
+{
+  Image<eRead, eAccessPoint, eEdgeClamped> pos;
+  Image<eRead, eAccessRandom, eEdgeClamped> clouds;
+  Image<eRead, eAccessRandom, eEdgeClamped> envSun;
+  Image<eWrite> dst;
+
+param:
+  int output;
+  float3 camRow0;
+  float3 camRow1;
+  float3 camRow2;
+  float3 camPosition;
+  float focal;
+  float haperture;
+  float vaperture;
+  float sceneScale;
+  float2 cloudsSize;
+  float2 cloudsOverscan;
+  float3 sunDirection;
+  float sunRotation;
+  float cloudHeight;
+  float cloudDensity;
+  float shadowStrength;
+  int outsideLit;
+  float2 drift;
+  float penumbra;
+  int samples;
+  float shaftDensity;
+  float hazeHeight;
+  float shaftStart;
+  float maxDistance;
+  float skyDistance;
+  int marchSteps;
+  int useEnv;
+  int envScreen;
+  float envRotation;
+  float3 shaftColor;
+  float shaftIntensity;
+  float seed;
+
+local:
+  float pi;
+  float3 sunWorld;
+  float3 sunX;
+  float3 sunY;
+
+  void define()
+  {
+    defineParam(output, "output", 0);
+    defineParam(camRow0, "cam_row0", float3(1.0f, 0.0f, 0.0f));
+    defineParam(camRow1, "cam_row1", float3(0.0f, 1.0f, 0.0f));
+    defineParam(camRow2, "cam_row2", float3(0.0f, 0.0f, 1.0f));
+    defineParam(camPosition, "cam_position", float3(0.0f, 0.0f, 0.0f));
+    defineParam(focal, "focal", 35.0f);
+    defineParam(haperture, "haperture", 36.0f);
+    defineParam(vaperture, "vaperture", 20.25f);
+    defineParam(sceneScale, "scene_scale", 0.1f);
+    defineParam(cloudsSize, "clouds_size", float2(1920.0f, 1080.0f));
+    defineParam(cloudsOverscan, "clouds_overscan", float2(0.0f, 0.0f));
+    defineParam(sunDirection, "sun_direction", float3(0.0f, 0.5f, -1.0f));
+    defineParam(sunRotation, "sun_rotation", 0.0f);
+    defineParam(cloudHeight, "cloud_height", 2000.0f);
+    defineParam(cloudDensity, "cloud_density", 1.0f);
+    defineParam(shadowStrength, "shadow_strength", 1.0f);
+    defineParam(outsideLit, "outside_lit", 1);
+    defineParam(drift, "drift", float2(0.0f, 0.0f));
+    defineParam(penumbra, "penumbra", 0.5f);
+    defineParam(samples, "samples", 8);
+    defineParam(shaftDensity, "shaft_density", 0.0001f);
+    defineParam(hazeHeight, "haze_height", 1200.0f);
+    defineParam(shaftStart, "shaft_start", 0.0f);
+    defineParam(maxDistance, "max_distance", 0.0f);
+    defineParam(skyDistance, "sky_distance", 20000.0f);
+    defineParam(marchSteps, "march_steps", 48);
+    defineParam(useEnv, "use_env", 0);
+    defineParam(envScreen, "env_screen", 0);
+    defineParam(envRotation, "env_rotation", 0.0f);
+    defineParam(shaftColor, "shaft_color", float3(1.0f, 0.9f, 0.75f));
+    defineParam(shaftIntensity, "shaft_intensity", 1.0f);
+    defineParam(seed, "seed", 1.0f);
+  }
+
+  void init()
+  {
+    pi = 3.14159265358979f;
+    // An EzAtmosScatter sun is in its lat-long's frame, turned by its hdri rotation.
+    float a = -sunRotation * pi / 180.0f;
+    float3 sd = normalize(sunDirection);
+    sunWorld = float3(sd.x * cos(a) + sd.z * sin(a), sd.y, -sd.x * sin(a) + sd.z * cos(a));
+    float3 up = fabs(sunWorld.y) < 0.9f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
+    sunX = normalize(cross(up, sunWorld));
+    sunY = cross(sunWorld, sunX);
+  }
+
+  // Per-pixel jitter: interleaved gradient noise with a golden-ratio offset per use.
+  float jitterAt(int2 p, float k)
+  {
+    float g = 52.9829189f * (0.06711056f * p.x + 0.00583715f * p.y);
+    g = g - floor(g);
+    float v = g + k * 0.6180339887f + seed * 0.1234f;
+    return v - floor(v);
+  }
+
+  // The sun direction spread over a cone of radius `penumbra` degrees.
+  float3 jitteredSun(float j1, float j2)
+  {
+    float r = penumbra * pi / 180.0f * sqrt(j1);
+    float a = 2.0f * pi * j2;
+    return normalize(sunWorld + sunX * (r * cos(a)) + sunY * (r * sin(a)));
+  }
+
+  float3 cameraOrigin()
+  {
+    return camPosition * sceneScale;
+  }
+
+  // View ray of the plate pixel at (u, v) in 0..1 of the format.
+  float3 viewDir(float u, float v)
+  {
+    float3 c = float3((u - 0.5f) * haperture / focal, (v - 0.5f) * vaperture / focal, -1.0f);
+    return normalize(float3(dot(camRow0, c), dot(camRow1, c), dot(camRow2, c)));
+  }
+
+  // Opacity of the cloud the sun passes through on its way to p: 0 clear, 1 blocked.
+  // `inside` is set to 0 when the hit lands outside the clouds image.
+  float cloudOpacity(float3 p, float3 sun, float &inside)
+  {
+    inside = 1.0f;
+    if (p.y >= cloudHeight)
+      return 0.0f;
+    if (sun.y <= 0.01f) {
+      inside = 0.0f;
+      return 0.0f;
+    }
+    float3 hit = p + sun * ((cloudHeight - p.y) / sun.y);
+    hit = float3(hit.x - drift.x, hit.y, hit.z - drift.y);
+    float3 d = hit - cameraOrigin();
+    // Into camera space with the transpose of the camera rotation.
+    float cx = camRow0.x * d.x + camRow1.x * d.y + camRow2.x * d.z;
+    float cy = camRow0.y * d.x + camRow1.y * d.y + camRow2.y * d.z;
+    float cz = camRow0.z * d.x + camRow1.z * d.y + camRow2.z * d.z;
+    if (cz > -1e-3f) {
+      inside = 0.0f;
+      return 0.0f;
+    }
+    float u = 0.5f + (cx / -cz) * focal / haperture;
+    float v = 0.5f + (cy / -cz) * focal / vaperture;
+    // The format is the camera's frame; overscan baked into a bigger format sits around it.
+    float x = cloudsOverscan.x + u * (cloudsSize.x - 2.0f * cloudsOverscan.x);
+    float y = cloudsOverscan.y + v * (cloudsSize.y - 2.0f * cloudsOverscan.y);
+    if (x < clouds.bounds.x1 || x >= clouds.bounds.x2 || y < clouds.bounds.y1 || y >= clouds.bounds.y2) {
+      inside = 0.0f;
+      return 0.0f;
+    }
+    float a = bilinear(clouds, x - 0.5f, y - 0.5f).w;
+    return clamp(a * cloudDensity, 0.0f, 1.0f);
+  }
+
+  // Share of the sun that reaches p through the clouds: 1 lit, 0 under cloud.
+  float sunThrough(float3 p, float3 sun)
+  {
+    float inside;
+    float o = cloudOpacity(p, sun, inside);
+    if (inside == 0.0f)
+      return outsideLit != 0 ? 1.0f : 1.0f - shadowStrength;
+    return 1.0f - shadowStrength * o;
+  }
+
+  float2 latlongUV(float3 d)
+  {
+    float lon = atan2(d.x, -d.z) - envRotation * pi / 180.0f;
+    float lat = asin(clamp(d.y, -1.0f, 1.0f));
+    float u = lon / (2.0f * pi) + 0.5f;
+    return float2(u - floor(u), lat / pi + 0.5f);
+  }
+
+  float3 sunLight(float3 d, float2 screen)
+  {
+    if (useEnv == 0)
+      return shaftColor;
+    float2 uv = envScreen != 0 ? screen : latlongUV(d);
+    float4 c = bilinear(envSun, envSun.bounds.x1 + uv.x * envSun.bounds.width() - 0.5f,
+                        envSun.bounds.y1 + uv.y * envSun.bounds.height() - 0.5f);
+    return float3(c.x, c.y, c.z) * shaftColor;
+  }
+
+  void process(int2 xy)
+  {
+    float4 P = pos();
+    float u = (xy.x - pos.bounds.x1 + 0.5f) / pos.bounds.width();
+    float v = (xy.y - pos.bounds.y1 + 0.5f) / pos.bounds.height();
+    float3 origin = cameraOrigin();
+    bool sky = P.x == 0.0f && P.y == 0.0f && P.z == 0.0f;
+    float3 surface = float3(P.x, P.y, P.z) * sceneScale;
+    float3 dir = sky ? viewDir(u, v) : normalize(surface - origin);
+    float dist = sky ? skyDistance : length(surface - origin);
+
+    if (output == 1) {
+      if (sky) {
+        dst() = float4(0.0f);
+        return;
+      }
+      float raw = sunThrough(surface, sunWorld);
+      float lit = 0.0f;
+      int n = samples > 1 ? samples : 1;
+      for (int k = 0; k < n; k++)
+        lit += sunThrough(surface, jitteredSun((k + jitterAt(xy, 3.0f)) / n, jitterAt(xy, 5.0f + k)));
+      lit /= n;
+      dst() = float4(raw, raw, raw, lit);
+      return;
+    }
+
+    // Shafts: march the air from shaftStart to the surface, stopping at the cloud sheet.
+    if (maxDistance > 0.0f)
+      dist = min(dist, maxDistance);
+    if (dir.y > 1e-4f && origin.y < cloudHeight)
+      dist = min(dist, (cloudHeight - origin.y) / dir.y);
+    float s = min(shaftStart, dist);
+    float3 light = sunLight(dir, float2(u, v));
+    float transmittance = 1.0f;
+    float lit = 0.0f;
+    float tPrev = s;
+    int steps = marchSteps > 1 ? marchSteps : 1;
+    float jitter = jitterAt(xy, 17.0f);
+    for (int i = 1; i <= steps; i++) {
+      // Quadratic spacing packs the steps near the camera, where beams are largest.
+      float f = (i - 1 + jitter) / steps;
+      float t = i < steps ? s + (dist - s) * f * f : dist;
+      if (t <= tPrev)
+        continue;
+      float tMid = 0.5f * (tPrev + t);
+      float3 p = origin + dir * tMid;
+      float sigma = shaftDensity * exp(-(p.y - origin.y) / hazeHeight) * (t - tPrev);
+      float scatter = transmittance * (1.0f - exp(-sigma));
+      float3 sun = jitteredSun(jitterAt(xy, 29.0f + i), jitterAt(xy, 31.0f + i));
+      lit += scatter * sunThrough(p, sun);
+      transmittance *= exp(-sigma);
+      tPrev = t;
+    }
+    float m = lit * shaftIntensity;
+    float3 rgb = light * m;
+    dst() = float4(rgb.x, rgb.y, rgb.z, m);
+  }
+};
