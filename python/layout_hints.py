@@ -5,7 +5,8 @@ MODULES = [
     # (Backdrop label, tile_color, node names it holds as a regex), top to bottom
     ("Inputs", 0x4a5a6aff, r"env|clouds|camera|atmos|sun|PositionPick|NoClouds|CloudsOrNone"),
     ("Sun colour from atmos", 0x7a6a3aff, r"AtmosSunPick|NoAtmos|AtmosOrNone"),
-    ("Gobo passes", 0x3a5a4aff, r"Pass_.*"),
+    ("Work resolution", 0x4a5a6aff, r"WorkPos.*"),
+    ("Gobo passes", 0x3a5a4aff, r"Pass_.*|Full_.*"),
     ("AOV layers", 0x6a4a4aff, r"Layer_.*"),
     ("Views", 0x5a4a6aff, r"ShaftsOver|ShadowView|ShaftsMatteView"),
     # Its own band, so the pipes into it come in along rails rather than across the views.

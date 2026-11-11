@@ -17,7 +17,10 @@
 //   rgb = that in-scatter coloured by the sun (EzAtmosScatter's atmos_haze_sun along the view
 //   ray, or shaftColor), alpha = the same without colour, as a matte.
 // output 1, ground: rgb = the gobo at the surface from the sun's centre, unsoftened (to check
-//   alignment), alpha = the softened sun visibility, 1 lit, 0 under cloud.
+//   alignment), alpha = the softened sun visibility, 1 lit, 0 under cloud. Sky is 1.
+//
+// frameSize is the size of `pos`'s format: the camera frame, for the view rays of sky pixels.
+// The passes can run on a scaled-down `pos` (impulse filtered) and be scaled back up after.
 //
 // Inputs: `pos` world position (P) in scene units in rgb, 0 for sky. `clouds` the flattened
 // clouds render, alpha = opacity, in the shot camera's view (overscan in its bbox, or baked
@@ -40,6 +43,7 @@ param:
   float focal;
   float haperture;
   float vaperture;
+  float2 frameSize;
   float sceneScale;
   float2 cloudsSize;
   float2 cloudsOverscan;
@@ -81,6 +85,7 @@ local:
     defineParam(focal, "focal", 35.0f);
     defineParam(haperture, "haperture", 36.0f);
     defineParam(vaperture, "vaperture", 20.25f);
+    defineParam(frameSize, "frame_size", float2(1920.0f, 1080.0f));
     defineParam(sceneScale, "scene_scale", 0.1f);
     defineParam(cloudsSize, "clouds_size", float2(1920.0f, 1080.0f));
     defineParam(cloudsOverscan, "clouds_overscan", float2(0.0f, 0.0f));
@@ -214,8 +219,9 @@ local:
   void process(int2 xy)
   {
     float4 P = pos();
-    float u = (xy.x - pos.bounds.x1 + 0.5f) / pos.bounds.width();
-    float v = (xy.y - pos.bounds.y1 + 0.5f) / pos.bounds.height();
+    // The camera frame is the format (frameSize), not the bbox, which may hold overscan.
+    float u = (xy.x + 0.5f) / frameSize.x;
+    float v = (xy.y + 0.5f) / frameSize.y;
     float3 origin = cameraOrigin();
     bool sky = P.x == 0.0f && P.y == 0.0f && P.z == 0.0f;
     float3 surface = float3(P.x, P.y, P.z) * sceneScale;
@@ -223,8 +229,9 @@ local:
     float dist = sky ? skyDistance : length(surface - origin);
 
     if (output == 1) {
+      // Sky counts as lit, so a matte scaled up from a smaller size has no dark rims on ridges.
       if (sky) {
-        dst() = float4(0.0f);
+        dst() = float4(1.0f);
         return;
       }
       float raw = sunThrough(surface, sunWorld);
