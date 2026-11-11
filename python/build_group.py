@@ -27,6 +27,13 @@ import node_layout  # noqa: E402
 # Shown on the node; bump it with each tagged release.
 VERSION = "1.0.0"
 KERNEL = "EzCloudShafts"
+# Nuke's own hash of the kernel, as it saves it in KernelDescription. With a wrong one the node
+# loads with no error, but every render through it is silently cancelled, so the viewer sits
+# on "computing". The hash can't be worked out without Nuke, so it's pinned to the source it
+# came from. After editing the kernel: load the .blink in a BlinkScript in NukeX, recompile,
+# take the 5th word of its KernelDescription, and update both of these.
+KERNEL_SOURCE_SHA256 = "dd759221e4f55bf6299961f24866905d8e952fc1a247df1798a72407fab8d593"
+KERNEL_NUKE_HASH = "2e0f79eebf381953ab50a40fa16f957c094fb905ada6fc9185feed17ea5bd6b9"
 GROUP_PATH = os.path.join(ROOT, "groups", "EzCloudShafts_group.nk")
 GIZMO_PATH = os.path.join(ROOT, "gizmos", "EzCloudShafts.gizmo")
 
@@ -57,13 +64,13 @@ PARAMS = [
     ("outside_lit", "outsideLit", "Int", 1, 1),
     ("drift", "drift", "Float", 2, (0, 0)),
     ("penumbra", "penumbra", "Float", 1, 0.5),
-    ("samples", "samples", "Int", 1, 6),
+    ("samples", "samples", "Int", 1, 8),
     ("shaft_density", "shaftDensity", "Float", 1, 0.0001),
     ("haze_height", "hazeHeight", "Float", 1, 1200.0),
     ("shaft_start", "shaftStart", "Float", 1, 0.0),
     ("max_distance", "maxDistance", "Float", 1, 0.0),
     ("sky_distance", "skyDistance", "Float", 1, 20000.0),
-    ("march_steps", "marchSteps", "Int", 1, 32),
+    ("march_steps", "marchSteps", "Int", 1, 48),
     ("use_env", "useEnv", "Int", 1, 0),
     ("env_screen", "envScreen", "Int", 1, 0),
     ("env_rotation", "envRotation", "Float", 1, 0.0),
@@ -97,7 +104,9 @@ def _b64(kind, count, value):
 def kernel_description(source):
     """What a saved BlinkScript node carries about its compiled kernel, so Nuke can make the
     parameter knobs before it compiles the source again."""
-    parts = ["3", '"%s"' % KERNEL, "iterate", "pixelWise", hashlib.sha256(source.encode()).hexdigest(),
+    if hashlib.sha256(source.encode()).hexdigest() != KERNEL_SOURCE_SHA256:
+        sys.exit("The kernel changed: update KERNEL_NUKE_HASH and KERNEL_SOURCE_SHA256 (see their comment).")
+    parts = ["3", '"%s"' % KERNEL, "iterate", "pixelWise", KERNEL_NUKE_HASH,
              str(len(IMAGES))]
     for name, mode, access in IMAGES:
         parts += ['"%s"' % name, mode, access]
