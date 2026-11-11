@@ -197,6 +197,39 @@ if env is None:
 if clouds is None:
     notes.append('Nothing in the clouds input.')
 
+# warns: (rank, text), the most important first; the top one becomes the status line.
+warns = []
+if cam is None or env is None or clouds is None:
+    warns.append((0, 'An input is missing: connect env, clouds and camera.'))
+
+# Find the world position and sun light layers by their usual names.
+if env is not None:
+    layers = set()
+    for c in env.channels():
+        layers.add(c.split('.')[0])
+    if n['position_layer'].value() not in layers or n['position_layer'].value() == 'rgba':
+        found = None
+        for want in ('p', 'pworld', 'p_world', 'pw', 'p_w', 'worldp', 'position', 'world_position', 'worldposition',
+                     'position_world', 'pos', 'wp'):
+            for have in sorted(layers):
+                if found is None and have.lower() == want:
+                    found = have
+        if found is not None:
+            n['position_layer'].setValue(found)
+            notes.append('Position layer: found "%s".' % found)
+    if not n['use_sun_layer'].value():
+        found = None
+        for want in ('light_sun', 'sun', 'sunlight', 'sun_light', 'rgba_sun', 'c_sun', 'lgt_sun', 'lg_sun', 'key',
+                     'key_light', 'light_key', 'rgba_key', 'lgt_key'):
+            for have in sorted(layers):
+                if found is None and have.lower() == want:
+                    found = have
+        if found is not None:
+            n['sun_layer'].setValue(found)
+            n['use_sun_layer'].setValue(True)
+            n['comp_shadow'].setValue(1)
+            notes.append('Sun light layer: found "%s", cloud shadow set to 1.' % found)
+
 if cam is not None and clouds is not None:
     m = [cam['world_matrix'].getValueAt(frame, i) for i in range(16)]
     focal = cam['focal'].getValueAt(frame)
@@ -253,15 +286,22 @@ if cam is not None and clouds is not None:
             sun = [s / norm for s in sun]
             h = n['cloud_height'].value()
             cam_pos = [m[3] * scale, m[7] * scale, m[11] * scale]
+            cz_ok = True
             ground = covered = 0
             bounds = clouds.bbox()
+            short = {'left': 0.0, 'right': 0.0, 'top': 0.0, 'bottom': 0.0}
+            dists = []
             for j in range(36):
                 for i in range(64):
                     px = (i + 0.5) * efmt.width() / 64
                     py = (j + 0.5) * efmt.height() / 36
                     p = [env.sample(layer + '.' + c, px, py) * scale
                          for c in ('red', 'green', 'blue')]
-                    if p == [0.0, 0.0, 0.0] or p[1] >= h:
+                    if p == [0.0, 0.0, 0.0]:
+                        continue
+                    dists.append(math.sqrt((p[0] - cam_pos[0]) ** 2 + (p[1] - cam_pos[1]) ** 2 +
+                                           (p[2] - cam_pos[2]) ** 2))
+                    if p[1] >= h:
                         continue
                     ground += 1
                     if sun[1] <= 0.01:
@@ -272,18 +312,94 @@ if cam is not None and clouds is not None:
                     cy = m[1] * d[0] + m[5] * d[1] + m[9] * d[2]
                     cz = m[2] * d[0] + m[6] * d[1] + m[10] * d[2]
                     if cz > -1e-3:
+                        cz_ok = False
                         continue
                     x = ox + (0.5 + cx / -cz * focal / hap) * (fmt.width() - 2 * ox)
                     y = oy + (0.5 + cy / -cz * focal / vap) * (fmt.height() - 2 * oy)
                     if bounds.x() <= x < bounds.x() + bounds.w() and bounds.y() <= y < bounds.y() + bounds.h():
                         covered += 1
+                    else:
+                        short['left'] = max(short['left'], bounds.x() - x)
+                        short['right'] = max(short['right'], x - bounds.x() - bounds.w())
+                        short['bottom'] = max(short['bottom'], bounds.y() - y)
+                        short['top'] = max(short['top'], y - bounds.y() - bounds.h())
             if ground:
-                notes.append('The gobo reaches %.0f%% of the ground; the rest uses "outside frame" (%s). '
-                             'More overscan on the clouds render raises it.'
-                             % (100.0 * covered / ground, n['outside_frame'].value()))
+                share = 100.0 * covered / ground
+                notes.append('The gobo reaches %.0f%% of the ground; the rest uses "outside frame" (%s).'
+                             % (share, n['outside_frame'].value()))
+                if share < 90:
+                    need = []
+                    for side in ('top', 'left', 'right', 'bottom'):
+                        if short[side] > 0:
+                            need.append('%s %d px' % (side, short[side]))
+                    text = 'Gobo reaches only %.0f%% of the ground.' % share
+                    if need and cz_ok:
+                        text += ' Ask CG for more overscan: ' + ', '.join(need) + '.'
+                    else:
+                        text += ' The sun rays land behind the camera, so overscan will not help.'
+                    warns.append((3, text))
+
+            # A first result that shows: haze from how far the scene reaches.
+            if dists:
+                dists.sort()
+                near_km = dists[len(dists) // 2] / 1000.0
+                far_km = dists[min(len(dists) - 1, int(len(dists) * 0.99))] / 1000.0
+                n['scene_depth'].setValue(round(near_km, 3))
+                density = min(2.0, max(0.005, 0.6 / max(near_km, 0.05)))
+                reach = round(max(far_km * 1.2, 1.0), 1)
+                if abs(n['shaft_density'].value() - 0.1) < 1e-6 and n['max_distance'].value() == 0:
+                    n['shaft_density'].setValue(round(density, 3))
+                    n['max_distance'].setValue(reach)
+                    n['sky_distance'].setValue(reach)
+                    notes.append('Scene reaches %.1f km (median %.1f km): haze density %.3f /km, max and sky distance '
+                                 '%.1f km.' % (far_km, near_km, density, reach))
+                else:
+                    notes.append('Scene reaches %.1f km (median %.1f km). Haze density around %.3f /km would suit it '
+                                 '(left as it is, since you have set it).' % (far_km, near_km, density))
+                if near_km > 500 or far_km < 0.002:
+                    warns.append((1, 'Units look wrong: the scene is %.3g km deep. Check "units to metres".' % near_km))
         else:
             notes.append('The env input has no "%s" layer: set "position layer" to its world position.' % layer)
 
+if cam is not None:
+    m = [cam['world_matrix'].getValueAt(frame, i) for i in range(16)]
+    sun = [n['sun_in_use'].getValueAt(frame, i) for i in range(3)]
+    rot = math.radians(-n['sun_rotation_in_use'].getValueAt(frame))
+    sun = [sun[0] * math.cos(rot) + sun[2] * math.sin(rot), sun[1],
+           -sun[0] * math.sin(rot) + sun[2] * math.cos(rot)]
+    norm = math.sqrt(sun[0] ** 2 + sun[1] ** 2 + sun[2] ** 2) or 1.0
+    sun = [v / norm for v in sun]
+    elev = math.degrees(math.asin(max(-1.0, min(1.0, sun[1]))))
+    fwd = [-m[2], -m[6], -m[10]]
+    az = (math.degrees(math.atan2(sun[0], -sun[2]) - math.atan2(fwd[0], -fwd[2])) + 180.0) % 360.0 - 180.0
+    notes.append('Sun %.0f deg up, %.0f deg %s of where the camera looks.' % (elev, abs(az), 'right' if az > 0 else 'left'))
+    if elev <= 0:
+        warns.append((1, 'The sun is below the horizon (%.0f deg): no beams can form.' % elev))
+    elif abs(az) > 120:
+        warns.append((2, 'The sun is behind the camera (%.0f deg off): beams run away from the lens and the gobo '
+                         'cannot reach. A sun-view clouds render would fix it.' % abs(az)))
+    elif abs(az) > 60:
+        warns.append((2, 'The sun is to the side (%.0f deg off): beams will be faint and the gobo only covers '
+                         'part of the frame.' % abs(az)))
+    elif elev > 55:
+        warns.append((2, 'The sun is high (%.0f deg): beams fall almost straight down and will not fan out.' % elev))
+    height = n['cloud_height'].value()
+    cam_m = m[7] * n['scene_scale'].value()
+    if abs(cam_m) > 20000:
+        warns.append((1, 'Units look wrong: the camera is %.0f km up. Check "units to metres".' % (cam_m / 1000.0)))
+    if height <= cam_m:
+        warns.append((1, 'Cloud height (%.0f m) is at or below the camera (%.0f m): nothing can cast from there.'
+                         % (height, cam_m)))
+    elif height > 15000:
+        warns.append((1, 'Cloud height %.0f m is implausibly high. It is in metres whatever the scene units are.' % height))
+
+warns.sort()
+status = warns[0][1] if warns else 'OK: the sun, units and gobo all look right.'
+n['status'].setValue(status)
+if warns:
+    notes.append('')
+    for rank, text in warns:
+        notes.append('Warning: ' + text)
 nuke.message('EzCloudShafts analyze\n\n' + '\n'.join(notes))
 '''
 
@@ -401,6 +517,10 @@ def knob_lines():
         % (q("Builds the Comp view from this node's layers next to it, as plain nodes: cloud shadow on the sun "
              "light, haze from shafts_lit, then the shafts. Their values follow the Comp knobs, and a Difference "
              "at the bottom is black while 'view' is Comp."), q(BREAKOUT)))
+    add('addUserKnob {1 status t %s +DISABLED}'
+        % q("The main warning from the last Analyze. It doesn't update by itself: press Analyze again."))
+    add('status "Press Analyze to check the setup."')
+    add('addUserKnob {7 scene_depth +INVISIBLE}')
     add('addUserKnob {4 viewer_resolution l "viewer resolution" t %s M {Full Half Quarter}}'
         % q("Size the passes are computed at in the Nuke GUI, then scaled back up. Half is about four times "
             "faster than Full. Renders from a terminal or the farm use 'render resolution'."))
