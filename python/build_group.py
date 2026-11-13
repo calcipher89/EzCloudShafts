@@ -247,7 +247,11 @@ if env is not None:
             n['comp_shadow'].setValue(1)
             notes.append('Sun light layer: found "%s", cloud shadow set to 1.' % found)
 
-if cam is not None and clouds is not None:
+gen = bool(n['gen_on'].value())
+if gen:
+    notes.append('Casting from the EzCloudGen volumes (its cloud_sunmap layer): cloud height and the gobo '
+                 'coverage do not apply, and every cloud casts, in frame or not.')
+if cam is not None and clouds is not None and not gen:
     m = [cam['world_matrix'].getValueAt(frame, i) for i in range(16)]
     focal = cam['focal'].getValueAt(frame)
     hap = cam['haperture'].getValueAt(frame)
@@ -404,7 +408,9 @@ if cam is not None:
     cam_m = m[7] * n['scene_scale'].value()
     if abs(cam_m) > 20000:
         warns.append((1, 'Units look wrong: the camera is %.0f km up. Check "units to metres".' % (cam_m / 1000.0)))
-    if height <= cam_m:
+    if gen:
+        pass
+    elif height <= cam_m:
         warns.append((1, 'Cloud height (%.0f m) is at or below the camera (%.0f m): nothing can cast from there.'
                          % (height, cam_m)))
     elif height > 15000:
