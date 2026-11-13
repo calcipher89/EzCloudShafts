@@ -9,6 +9,8 @@ its ground matte with the shadow worked out directly from the holes, and checks 
 shafts are brighter under the holes than under cloud. It prints a text report, no images.
 """
 
+import os
+
 import numpy as np
 
 W, H = 480, 270
@@ -186,6 +188,129 @@ def shafts(kernel, P, d, steps=48, density=1e-4, haze_h=1200.0, sky_distance=200
     return lit, free
 
 
+# ---- Cast from EzCloudGen volumes: the cloud_sunmap lookup ------------------------------------
+# EzCloudGen writes, for each ground point g (metres from the camera, on the ground), the clouds'
+# optical depth along the sun ray up from g, and that times the altitude (km) and altitude squared.
+# The kernel shades a point at altitude y by the part of that optical depth above y, taking the
+# cloud on the ray as a uniform slab mean +- sqrt(3 var). Here the clouds are a known 3D density,
+# the map is built the way EzCloudGen builds it, and the lookup is compared with marching the
+# density directly.
+
+SUN_MAP_SIZE = 10000.0       # metres: EzCloudGen's SUN_MAP_SIZE
+SUN_MAP_RES = int(os.environ.get("SUN_MAP_RES", "512"))   # EzCloudGen uses 1536
+
+
+def blobs(cases):
+    """3D cloud densities (extinction per metre) as functions of world x, y, z (metres)."""
+    def thin_slab(x, y, z):
+        # A thin deck: 2500 to 2800 m, broken into round clouds of 600 m on a 1500 m grid.
+        gx = (x / 1500.0) % 1.0 - 0.5
+        gz = (z / 1500.0) % 1.0 - 0.5
+        inside = np.sqrt(gx ** 2 + gz ** 2) * 1500.0 < 600.0
+        return np.where(inside & (y > 2500.0) & (y < 2800.0), 0.02, 0.0)
+
+    def towers(x, y, z):
+        # Towering cumulus: columns 1200 m across from 1500 m up to 6500 m, every 3500 m.
+        gx = (x / 3500.0) % 1.0 - 0.5
+        gz = (z / 3500.0) % 1.0 - 0.5
+        inside = np.sqrt(gx ** 2 + gz ** 2) * 3500.0 < 600.0
+        return np.where(inside & (y > 1500.0) & (y < 6500.0), 0.02, 0.0)
+
+    def stacked(x, y, z):
+        # A deck at 1500-1800 m under a second one at 4000-4300 m, offset: two separate layers on
+        # one sun ray, which the slab shortcut merges into one.
+        gx = (x / 2000.0) % 1.0 - 0.5
+        gz = (z / 2000.0) % 1.0 - 0.5
+        a = (np.sqrt(gx ** 2 + gz ** 2) * 2000.0 < 500.0) & (y > 1500.0) & (y < 1800.0)
+        hx = ((x + 1000.0) / 2000.0) % 1.0 - 0.5
+        b = (np.sqrt(hx ** 2 + gz ** 2) * 2000.0 < 500.0) & (y > 4000.0) & (y < 4300.0)
+        return np.where(a | b, 0.02, 0.0)
+
+    table = {"thin deck": thin_slab, "towers": towers, "two decks": stacked}
+    return [(c, table[c]) for c in cases]
+
+
+def march_tau(density, p, sun, top=7000.0, steps=400):
+    """Optical depth from points p (N x 3, metres) towards the sun, up to altitude `top`."""
+    length = np.maximum((top - p[:, 1]) / sun[1], 0.0)
+    tau = np.zeros(len(p))
+    for i in range(steps):
+        t = (i + 0.5) / steps * length
+        q = p + sun * t[:, None]
+        tau += density(q[:, 0], q[:, 1], q[:, 2]) * length / steps
+    return tau
+
+
+def build_sun_map(density, sun, origin):
+    """EzCloudGen's output 5: (tau, sum tau * km, sum tau * km^2) per texel."""
+    n = SUN_MAP_RES
+    c = (np.arange(n) + 0.5) / n * 2.0 - 1.0
+    mu, mv = np.meshgrid(c, c)
+    r = np.sqrt(mu ** 2 + mv ** 2)
+    r = np.minimum(r, 0.995)
+    k = SUN_MAP_SIZE / (1.0 - r)
+    g = np.stack([mu * k + origin[0], np.zeros_like(mu), mv * k + origin[2]], -1).reshape(-1, 3)
+    top, steps = 7000.0, 400
+    length = top / sun[1]
+    tau = np.zeros(len(g))
+    m1 = np.zeros(len(g))
+    m2 = np.zeros(len(g))
+    for i in range(steps):
+        t = (i + 0.5) / steps * length
+        q = g + sun * t
+        dt = density(q[:, 0], q[:, 1], q[:, 2]) * length / steps
+        km = q[:, 1] * 0.001
+        tau += dt
+        m1 += dt * km
+        m2 += dt * km * km
+    return np.stack([tau, m1, m2], -1).reshape(n, n, 3)
+
+
+def bilinear3(img, x, y):
+    return np.stack([bilinear(img[..., i], x, y) for i in range(3)], -1)
+
+
+def volume_lookup(smap, p, sun, origin):
+    """The kernel's cloudOpacity with useSunMap: the share of the sun that reaches p."""
+    n = smap.shape[0]
+    gx = p[:, 0] - origin[0] - sun[0] / sun[1] * p[:, 1]
+    gz = p[:, 2] - origin[2] - sun[2] / sun[1] * p[:, 1]
+    k = 1.0 / (np.sqrt(gx ** 2 + gz ** 2) + SUN_MAP_SIZE)
+    m = bilinear3(smap, (gx * k * 0.5 + 0.5) * n, (gz * k * 0.5 + 0.5) * n)
+    tau = m[:, 0]
+    safe = np.maximum(tau, 1e-9)
+    mean = m[:, 1] / safe
+    hw = np.sqrt(3.0 * np.maximum(m[:, 2] / safe - mean ** 2, 0.0)) + 0.02
+    f = np.clip((p[:, 1] * 0.001 - (mean - hw)) / (2.0 * hw), 0.0, 1.0)
+    vis = np.exp(-tau * (1.0 - f))
+    return np.where(tau < 1e-4, 1.0, vis)
+
+
+def check_volumes(surf, sun):
+    """Ground and air points, each cloud case: lookup vs truth."""
+    origin = CAM_POS * SCALE
+    rng = np.random.default_rng(1)
+    # Air points spread over the view: 0.5 to 15 km out, 200 m to 5 km up.
+    n = 4000
+    ang = rng.uniform(-0.5, 0.5, n)
+    dist = rng.uniform(500.0, 15000.0, n)
+    air = np.stack([np.sin(ang) * dist, rng.uniform(200.0, 5000.0, n), -np.cos(ang) * dist], -1) + \
+        np.array([origin[0], 0.0, origin[2]])
+    print("Cast from EzCloudGen volumes (sun map %d px over %.0f km, %d ground and %d air points):"
+          % (SUN_MAP_RES, SUN_MAP_SIZE / 1000.0, len(surf), n))
+    for name, density in blobs(["thin deck", "towers", "two decks"]):
+        smap = build_sun_map(density, sun, origin)
+        for where, pts in (("ground", surf), ("air", air)):
+            truth = np.exp(-march_tau(density, pts, sun))
+            got = volume_lookup(smap, pts, sun, origin)
+            err = np.abs(got - truth)
+            # Edges: points the truth has part shaded. Hard-edged test clouds put the worst
+            # errors there, from the map's texels, not from the slab shortcut.
+            edge = (truth > 0.02) & (truth < 0.98)
+            print("  %-9s %-6s: mean err %.3f, within 0.1 on %5.1f%%, away from edges %.3f, worst %.2f"
+                  % (name, where, err.mean(), 100 * (err < 0.1).mean(), err[~edge].mean(), err.max()))
+
+
 def main():
     sun = SUN / np.linalg.norm(SUN)
     P, d = render_scene()
@@ -239,6 +364,8 @@ def main():
             _, inside = Kernel(render_clouds(ovs), ovs).sun_through(surf, s)
             row.append("%3d px %5.1f%%" % (ovs, 100 * inside.mean()))
         print("coverage, sun %-6s: %s" % (name, ", ".join(row)))
+
+    check_volumes(surf, sun)
 
 
 if __name__ == "__main__":
