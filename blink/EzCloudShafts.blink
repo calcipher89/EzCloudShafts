@@ -37,6 +37,12 @@
 // useSunView: `sunClouds` is the clouds' opacity from an orthographic camera looking along the
 // sun (sunRow*, sunPosition, sunWidth in scene units), and is used instead of `clouds`: it has no
 // in-frame limit. The sun ray still meets the sheet first, so softness works the same.
+// useSunMap: `sunMap` is EzCloudGen's cloud_sunmap layer: for each ground point around the
+// camera (sunMapSize sets its reach), the clouds' optical depth along the sun ray in red, and
+// that times the mean altitude (km) and mean squared altitude in green and blue. The clouds are
+// then real volumes, not a sheet: a point is shaded by the part of the optical depth above its
+// own altitude, so tall clouds, clouds outside the frame and the air above a low deck all come
+// out right. cloudHeight is not used.
 
 kernel EzCloudShafts : ImageComputationKernel<ePixelWise>
 {
@@ -44,6 +50,7 @@ kernel EzCloudShafts : ImageComputationKernel<ePixelWise>
   Image<eRead, eAccessRandom, eEdgeClamped> clouds;
   Image<eRead, eAccessRandom, eEdgeClamped> envSun;
   Image<eRead, eAccessRandom, eEdgeClamped> sunClouds;
+  Image<eRead, eAccessRandom, eEdgeClamped> sunMap;
   Image<eWrite> dst;
 
 param:
@@ -87,6 +94,9 @@ param:
   float3 sunRow2;
   float3 sunPosition;
   float sunWidth;
+  int useSunMap;
+  float sunMapSize;
+  float groundHeight;
 
 local:
   float pi;
@@ -136,6 +146,9 @@ local:
     defineParam(sunRow2, "sun_row2", float3(0.0f, 0.0f, 1.0f));
     defineParam(sunPosition, "sun_position", float3(0.0f, 0.0f, 0.0f));
     defineParam(sunWidth, "sun_width", 100000.0f);
+    defineParam(useSunMap, "use_sun_map", 0);
+    defineParam(sunMapSize, "sun_map_size", 10000.0f);
+    defineParam(groundHeight, "ground_height", 0.0f);
   }
 
   void init()
@@ -184,6 +197,30 @@ local:
   float cloudOpacity(float3 p, float3 sun, float &inside)
   {
     inside = 1.0f;
+    if (useSunMap != 0) {
+      if (sun.y <= 0.01f) {
+        inside = 0.0f;
+        return 0.0f;
+      }
+      // The ground point this sun ray comes up from, in metres around the camera.
+      float3 o = cameraOrigin();
+      float qy = p.y - groundHeight * sceneScale;
+      float gx = p.x - drift.x - o.x - sun.x / sun.y * qy;
+      float gz = p.z - drift.y - o.z - sun.z / sun.y * qy;
+      float k = 1.0f / (sqrt(gx * gx + gz * gz) + sunMapSize);
+      float w = sunMap.bounds.width();
+      float h = sunMap.bounds.height();
+      float4 m = bilinear(sunMap, sunMap.bounds.x1 + (gx * k * 0.5f + 0.5f) * w - 0.5f,
+                          sunMap.bounds.y1 + (gz * k * 0.5f + 0.5f) * h - 0.5f);
+      float tau = m.x;
+      if (tau < 1e-4f)
+        return 0.0f;
+      // The cloud on this ray as a slab around its mean altitude: p is shaded by what is above it.
+      float mean = m.y / tau;
+      float hw = sqrt(3.0f * max(m.z / tau - mean * mean, 0.0f)) + 0.02f;
+      float f = clamp((qy * 0.001f - (mean - hw)) / (2.0f * hw), 0.0f, 1.0f);
+      return clamp(1.0f - exp(-tau * (1.0f - f) * cloudDensity), 0.0f, 1.0f);
+    }
     if (p.y >= cloudHeight)
       return 0.0f;
     if (sun.y <= 0.01f) {
@@ -313,7 +350,7 @@ local:
     // Shafts: march the air from shaftStart to the surface, stopping at the cloud sheet.
     if (maxDistance > 0.0f)
       dist = min(dist, maxDistance);
-    if (dir.y > 1e-4f && origin.y < cloudHeight)
+    if (useSunMap == 0 && dir.y > 1e-4f && origin.y < cloudHeight)
       dist = min(dist, (cloudHeight - origin.y) / dir.y);
     float s = min(shaftStart, dist);
     float3 light = sunLight(dir, float2(u, v));

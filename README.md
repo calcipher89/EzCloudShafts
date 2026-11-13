@@ -77,6 +77,8 @@ pixels). It also reports how much of the ground the gobo reaches.
 Units are metres inside. **units to metres** turns the scene's units into metres (0.1 for
 decimetres), and Analyze copies it from EzAtmosScatter.
 
+**cast from** picks what casts the shadows. *Clouds render* is the sheet described above. *EzCloudGen volumes* reads the `cloud_sunmap` layer of an EzCloudGen plugged into `clouds` (its **sun shadow layer** and **breakout layers** on): the clouds' optical depth towards the sun from every ground point around the camera, with their mean height. Each point in the air is then shaded by the cloud that is really above it on its sun ray, so a tall cumulus casts from its whole body, clouds above or beside the frame cast too, and the air above a low deck stays lit. **cloud height**, **use cloud depth**, the gap levels and the overscan don't apply. *Auto* picks the volumes when it finds such an EzCloudGen. Both nodes must use the same sun.
+
 **use cloud depth** casts each cloud from the height its depth says instead of one flat **cloud height**. Use it for clouds at clearly different heights, with a good `depth.Z`. Leave it off for a single layer.
 
 **gap contrast** and **gap threshold** apply levels to the clouds' alpha before it is used, so thin or soft cloud renders give crisper beams. The defaults (1 and 0.5) change nothing, and the render itself isn't touched. Gobo Check shows the effect.

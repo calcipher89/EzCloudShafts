@@ -26,15 +26,15 @@ import layout_hints  # noqa: E402
 import node_layout  # noqa: E402
 
 # Shown on the node; bump it with each tagged release.
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 KERNEL = "EzCloudShafts"
 # Nuke's own hash of the kernel, as it saves it in KernelDescription. With a wrong one the node
 # loads with no error, but every render through it is silently cancelled, so the viewer sits
 # on "computing". The hash can't be worked out without Nuke, so it's pinned to the source it
 # came from. After editing the kernel: load the .blink in a BlinkScript in NukeX, recompile,
 # take the 5th word of its KernelDescription, and update both of these.
-KERNEL_SOURCE_SHA256 = "bf934147338fcaf467521dde28d1072dabcf42a78be024b2875ca7f58d99e4a8"
-KERNEL_NUKE_HASH = "73c6fc51b82e395f1a211ae8c60f3ace8e4f20478ec0258b84c0109ae9e26207"
+KERNEL_SOURCE_SHA256 = "ef202a311bf196615b2899b6b28c8a9400ab510fa30c1058b7bca243cb34f951"
+KERNEL_NUKE_HASH = "67d872eeac81e9d07e28e119c87f04ed446eddbcd0a341d9acdc54fc8533999c"
 # The soften kernel, pinned the same way.
 SOFTEN_KERNEL = "EzCloudShaftsSoften"
 SOFTEN_SOURCE_SHA256 = "ab1c6cd45fdaa9f53d370f2a251842258cbc01eddfe4d7c824f9181d74c11d38"
@@ -51,7 +51,8 @@ LAYERS = {"P": ["red", "green", "blue"],
           "shafts_lit": ["red", "green", "blue", "alpha"],
           "atmos_haze_sun": ["red", "green", "blue"],
           "atmos_haze_sky": ["red", "green", "blue"],
-          "shafts_haze": ["red", "green", "blue"]}
+          "shafts_haze": ["red", "green", "blue"],
+          "cloud_sunmap": ["red", "green", "blue"]}
 
 # Kernel parameters, in the kernel's order: (name, variable, type, count, default).
 PARAMS = [
@@ -95,10 +96,13 @@ PARAMS = [
     ("sun_row2", "sunRow2", "Float", 3, (0, 0, 1)),
     ("sun_position", "sunPosition", "Float", 3, (0, 0, 0)),
     ("sun_width", "sunWidth", "Float", 1, 100000.0),
+    ("use_sun_map", "useSunMap", "Int", 1, 0),
+    ("sun_map_size", "sunMapSize", "Float", 1, 10000.0),
+    ("ground_height", "groundHeight", "Float", 1, 0.0),
 ]
 LOCALS = [("pi", 1), ("sunWorld", 3), ("sunX", 3), ("sunY", 3)]
 IMAGES = [("pos", "Read", "Point"), ("clouds", "Read", "Random"), ("envSun", "Read", "Random"),
-          ("sunClouds", "Read", "Random"), ("dst", "Write", "Point")]
+          ("sunClouds", "Read", "Random"), ("sunMap", "Read", "Random"), ("dst", "Write", "Point")]
 
 
 def q(text):
@@ -172,6 +176,8 @@ FIND_CAMERA = _find("c", 2, "focal")
 FIND_ATMOS = _find("a", 3, "haze_density")
 FIND_AXIS = _find("x", 4, "world_matrix")
 FIND_SUNCAM = _find("c", 6, "world_matrix")
+# An EzCloudGen feeding the clouds input (through Shuffles, Dots, grades...).
+FIND_GEN = _find("e", 1, "sun_map_out")
 
 
 def py_expr(code):
@@ -782,6 +788,12 @@ def knob_lines():
     add('addUserKnob {7 sun_rotation_in_use l "sun rotation" +INVISIBLE}')
 
     add('addUserKnob {26 clouds_divider l "Cloud gobo"}')
+    add('addUserKnob {4 cast_from l "cast from" t %s M {Auto "Clouds render" "EzCloudGen volumes"}}'
+        % q("What casts the shadows. Clouds render: the clouds input's alpha, as a sheet at 'cloud height' "
+            "(or the sunclouds render). EzCloudGen volumes: the cloud_sunmap layer of an EzCloudGen in the "
+            "clouds input, so rays and ground shadows come from the real volumes: tall clouds, and clouds above "
+            "or beside the frame, cast as they should, and 'cloud height' isn't used. Auto picks the volumes "
+            "when the clouds input is an EzCloudGen with 'sun shadow layer' and 'breakout layers' on."))
     add('addUserKnob {7 cloud_height l "cloud height (m)" t %s R 0 8000}'
         % q("Height of the cloud sheet above the scene's 0, in metres. Analyze measures it from the clouds' "
             "depth; raise or lower it to slide the shadows along the sun."))
@@ -953,6 +965,17 @@ def knob_lines():
     add('sun_world_matrix {%s}' % " ".join(
         "{%s}" % q(py_expr(FIND_SUNCAM + "ret = c['world_matrix'].getValueAt(nuke.frame(), %d) "
                                          "if c is not None else %d" % (i, identity[i]))) for i in range(16)))
+    # An EzCloudGen in the clouds input, with its cloud_sunmap layer on.
+    add('addUserKnob {3 gen_found +INVISIBLE}')
+    add('gen_found {{%s}}' % q(py_expr(FIND_GEN + "ret = 1 if e is not None and e['sun_map_out'].value() "
+                                                  "and e['breakout'].value() else 0")))
+    add('addUserKnob {7 gen_map_size +INVISIBLE}')
+    add('gen_map_size {{%s}}' % q(py_expr(FIND_GEN + "ret = e['sun_map_size'].value() if e is not None "
+                                                     "and e.knob('sun_map_size') else 10000")))
+    add('addUserKnob {7 gen_ground +INVISIBLE}')
+    add('gen_ground {{%s}}' % q(py_expr(FIND_GEN + "ret = e['ground_height'].value() if e is not None else 0")))
+    add('addUserKnob {3 gen_on +INVISIBLE}')
+    add('gen_on {{"cast_from==2 || (cast_from==0 && gen_found)"}}')
     # 0 manual, 1 Axis, 2 atmos.
     add('addUserKnob {3 sun_source +INVISIBLE}')
     add('sun_source {{"sun_from==1 ? (axis_found ? 1 : 0) : sun_from==2 ? (atm_found ? 2 : 0) : '
@@ -1027,6 +1050,9 @@ def blink_node(name, output, source, work, overrides=None):
         "sun_row2": "{parent.sun_world_matrix.8} {parent.sun_world_matrix.9} {parent.sun_world_matrix.10}",
         "sun_position": "{parent.sun_world_matrix.3} {parent.sun_world_matrix.7} {parent.sun_world_matrix.11}",
         "sun_width": "{parent.sun_view_width}",
+        "use_sun_map": "{parent.gen_on}",
+        "sun_map_size": "{parent.gen_map_size}",
+        "ground_height": "{parent.gen_ground}",
     }
     links.update(overrides or {})
     assert set(links) == set(p[0] for p in PARAMS), set(p[0] for p in PARAMS) ^ set(links)
@@ -1104,6 +1130,11 @@ def nodes(source):
         ("SunGoboLevels", "Expression", ["SunCloudsOrNone"],
          ["channel0 none", "channel1 none", "channel2 none", "channel3 alpha",
           'expr3 "clamp(0.5+(a-parent.gap_threshold)*parent.gap_contrast,0,1)"']),
+        # EzCloudGen's sun map (cloud_sunmap), when the clouds input carries it.
+        ("SunMapPick", "Shuffle2", ["CloudsOrNone"], ["fromInput1 {{0} B}", "in1 cloud_sunmap", "fromInput2 {{0} B}",
+                                                      "mappings " + shuffle_mappings("cloud_sunmap")]),
+        ("NoSunMap", "Constant", [], ["inputs 0", "format " + tiny]),
+        ("SunMapOrNone", "Switch", ["NoSunMap", "SunMapPick"], ["inputs 2", "which {{parent.gen_on}}"]),
         ("AtmosSkyPick", "Shuffle2", ["atmos"], ["fromInput1 {{0} B}", "in1 atmos_haze_sky", "fromInput2 {{0} B}",
                                                  "mappings " + shuffle_mappings("atmos_haze_sky")]),
         ("NoAtmosSky", "Constant", [], ["inputs 0", "format " + tiny]),
@@ -1116,18 +1147,18 @@ def nodes(source):
         # edge), then are scaled back up to the env's format.
         ("WorkPosMatte", "Reformat", ["PositionPick"], work_reformat("parent.matte_scale")),
         ("WorkPosShafts", "Reformat", ["PositionPick"], work_reformat("parent.shafts_scale")),
-        ("Pass_Shafts", "BlinkScript", ["WorkPosShafts", "GoboLevels", "AtmosOrNone", "SunGoboLevels"],
-         ["inputs 4"] + blink_node("Pass_Shafts", 0, source, "WorkPosShafts")),
-        ("Pass_Ground", "BlinkScript", ["WorkPosMatte", "GoboLevels", "AtmosOrNone", "SunGoboLevels"],
-         ["inputs 4"] + blink_node("Pass_Ground", 1, source, "WorkPosMatte")),
+        ("Pass_Shafts", "BlinkScript", ["WorkPosShafts", "GoboLevels", "AtmosOrNone", "SunGoboLevels", "SunMapOrNone"],
+         ["inputs 5"] + blink_node("Pass_Shafts", 0, source, "WorkPosShafts")),
+        ("Pass_Ground", "BlinkScript", ["WorkPosMatte", "GoboLevels", "AtmosOrNone", "SunGoboLevels", "SunMapOrNone"],
+         ["inputs 5"] + blink_node("Pass_Ground", 1, source, "WorkPosMatte")),
         ("Full_Shafts", "Reformat", ["Pass_Shafts"], full_reformat()),
         ("Full_Ground", "Reformat", ["Pass_Ground"], full_reformat()),
-        ("Pass_LitShare", "BlinkScript", ["WorkPosShafts", "GoboLevels", "AtmosOrNone", "SunGoboLevels"],
-         ["inputs 4"] + blink_node("Pass_LitShare", 2, source, "WorkPosShafts")),
+        ("Pass_LitShare", "BlinkScript", ["WorkPosShafts", "GoboLevels", "AtmosOrNone", "SunGoboLevels", "SunMapOrNone"],
+         ["inputs 5"] + blink_node("Pass_LitShare", 2, source, "WorkPosShafts")),
         ("Full_LitShare", "Reformat", ["Pass_LitShare"], full_reformat()),
         # The atmos's sky haze as the camera sees it, for the Comp's haze colour.
-        ("Pass_ViewSky", "BlinkScript", ["WorkPosShafts", "GoboLevels", "AtmosSkyOrNone", "SunGoboLevels"],
-         ["inputs 4"] + blink_node("Pass_ViewSky", 3, source, "WorkPosShafts", overrides={
+        ("Pass_ViewSky", "BlinkScript", ["WorkPosShafts", "GoboLevels", "AtmosSkyOrNone", "SunGoboLevels", "SunMapOrNone"],
+         ["inputs 5"] + blink_node("Pass_ViewSky", 3, source, "WorkPosShafts", overrides={
              "use_env": '{"parent.atm_found"}', "shaft_color": "1 1 1"})),
         ("Full_ViewSky", "Reformat", ["Pass_ViewSky"], full_reformat()),
         # Softened, to take the march's sampling grain out of the layers.
