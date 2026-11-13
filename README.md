@@ -122,7 +122,7 @@ Plug the render into `sunclouds` and the camera into `suncam`, and set **sun vie
 | `blink/EzCloudShafts.blink` | The kernel: gobo lookup, ground matte (output 1), shafts march (output 0). |
 | `python/build_group.py` | Writes the Group and gizmo from the kernel. Plain Python, no Nuke: `python3 python/build_group.py`. |
 | `python/node_layout.py`, `python/layout_hints.py` | Lay out the graph inside the Group (shared with EzDepthHaze). |
-| `reference/check_kernel.py` | NumPy port of the kernel, checked on a synthetic scene against the true shadow. Prints a text report. |
+| `reference/check_kernel.py` | NumPy port of the kernel, checked on a synthetic scene against the true shadow, for the clouds render and for the EzCloudGen volumes (`SUN_MAP_RES=1536` for EzCloudGen's real map size; about 5 minutes). Prints a text report. |
 
 Bump `VERSION` in `python/build_group.py` for each tagged release.
 
