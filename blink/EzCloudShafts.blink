@@ -43,6 +43,13 @@
 // then real volumes, not a sheet: a point is shaded by the part of the optical depth above its
 // own altitude, so tall clouds, clouds outside the frame and the air above a low deck all come
 // out right. cloudHeight is not used.
+// useHdri: `clouds` is a lat-long sky (an HDRI) with the cloud opacity keyed into its alpha. The
+// clouds are put on a deck at cloudHeight above the scene's 0 (on a curved earth of radius
+// earthRadius metres, or flat when it is 0). The sun ray from p meets the deck, and the sky is
+// looked up in the direction of that spot from hdriOrigin (where the HDRI was shot, scene units),
+// turned by hdriRotation degrees like EzAtmosScatter's hdri rotation. An HDRI holds no distances,
+// so the deck height is a guess the user sets; but it sees every direction, so there is no
+// in-frame limit. A deck spot at or below the HDRI's horizon counts as outside.
 
 kernel EzCloudShafts : ImageComputationKernel<ePixelWise>
 {
@@ -97,6 +104,10 @@ param:
   int useSunMap;
   float sunMapSize;
   float groundHeight;
+  int useHdri;
+  float hdriRotation;
+  float3 hdriOrigin;
+  float earthRadius;
 
 local:
   float pi;
@@ -149,6 +160,10 @@ local:
     defineParam(useSunMap, "use_sun_map", 0);
     defineParam(sunMapSize, "sun_map_size", 10000.0f);
     defineParam(groundHeight, "ground_height", 0.0f);
+    defineParam(useHdri, "use_hdri", 0);
+    defineParam(hdriRotation, "hdri_rotation", 0.0f);
+    defineParam(hdriOrigin, "hdri_origin", float3(0.0f, 0.0f, 0.0f));
+    defineParam(earthRadius, "earth_radius", 6371000.0f);
   }
 
   void init()
@@ -192,6 +207,15 @@ local:
     return normalize(float3(dot(camRow0, c), dot(camRow1, c), dot(camRow2, c)));
   }
 
+  // Lat-long position (0..1) of the direction d, in a lat-long turned by `rotation` degrees.
+  float2 latlongUV(float3 d, float rotation)
+  {
+    float lon = atan2(d.x, -d.z) - rotation * pi / 180.0f;
+    float lat = asin(clamp(d.y, -1.0f, 1.0f));
+    float u = lon / (2.0f * pi) + 0.5f;
+    return float2(u - floor(u), lat / pi + 0.5f);
+  }
+
   // Opacity of the cloud the sun passes through on its way to p: 0 clear, 1 blocked.
   // `inside` is set to 0 when the hit lands outside the clouds image.
   float cloudOpacity(float3 p, float3 sun, float &inside)
@@ -220,6 +244,38 @@ local:
       float hw = sqrt(3.0f * max(m.z / tau - mean * mean, 0.0f)) + 0.02f;
       float f = clamp((qy * 0.001f - (mean - hw)) / (2.0f * hw), 0.0f, 1.0f);
       return clamp(1.0f - exp(-tau * (1.0f - f) * cloudDensity), 0.0f, 1.0f);
+    }
+    if (useHdri != 0) {
+      if (sun.y <= 0.01f) {
+        inside = 0.0f;
+        return 0.0f;
+      }
+      float3 o = hdriOrigin * sceneScale;
+      float3 hit;
+      if (earthRadius > 0.0f) {
+        // The deck is a shell around the earth's centre, below the HDRI's spot at the scene's 0.
+        float3 q = p - float3(o.x, -earthRadius, o.z);
+        float r = earthRadius + cloudHeight;
+        float b = dot(q, sun);
+        float c = dot(q, q) - r * r;
+        if (c >= 0.0f)
+          return 0.0f;
+        hit = p + sun * (sqrt(b * b - c) - b);
+      } else {
+        if (p.y >= cloudHeight)
+          return 0.0f;
+        hit = p + sun * ((cloudHeight - p.y) / sun.y);
+      }
+      float3 d = float3(hit.x - drift.x, hit.y, hit.z - drift.y) - o;
+      d = normalize(d);
+      if (d.y <= 0.005f) {
+        inside = 0.0f;
+        return 0.0f;
+      }
+      float2 uv = latlongUV(d, hdriRotation);
+      float4 c = bilinear(clouds, clouds.bounds.x1 + uv.x * clouds.bounds.width() - 0.5f,
+                          clouds.bounds.y1 + uv.y * clouds.bounds.height() - 0.5f);
+      return clamp(c.w * cloudDensity, 0.0f, 1.0f);
     }
     if (p.y >= cloudHeight)
       return 0.0f;
@@ -295,19 +351,11 @@ local:
     return 1.0f - shadowStrength * o;
   }
 
-  float2 latlongUV(float3 d)
-  {
-    float lon = atan2(d.x, -d.z) - envRotation * pi / 180.0f;
-    float lat = asin(clamp(d.y, -1.0f, 1.0f));
-    float u = lon / (2.0f * pi) + 0.5f;
-    return float2(u - floor(u), lat / pi + 0.5f);
-  }
-
   float3 sunLight(float3 d, float2 screen)
   {
     if (useEnv == 0)
       return shaftColor;
-    float2 uv = envScreen != 0 ? screen : latlongUV(d);
+    float2 uv = envScreen != 0 ? screen : latlongUV(d, envRotation);
     float4 c = bilinear(envSun, envSun.bounds.x1 + uv.x * envSun.bounds.width() - 0.5f,
                         envSun.bounds.y1 + uv.y * envSun.bounds.height() - 0.5f);
     return float3(c.x, c.y, c.z) * shaftColor;

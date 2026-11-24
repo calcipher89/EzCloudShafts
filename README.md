@@ -16,7 +16,7 @@ the same node as a gizmo.
 | Input | What to plug in |
 | --- | --- |
 | `env` (B pipe) | The environment render with its world position layer (P World, scene units). Pick it in **position layer**. |
-| `clouds` | The flattened clouds render (rgba + depth), from the shot camera. Overscan in its bbox works as is. Overscan baked into a bigger format is assumed to sit evenly around the frame. |
+| `clouds` | The flattened clouds render (rgba + depth), from the shot camera. Overscan in its bbox works as is. Overscan baked into a bigger format is assumed to sit evenly around the frame. With **cast from: HDRI sky**, a lat-long HDRI instead (see *HDRI sky*). |
 | `camera` | The shot camera. |
 | `atmos` | Optional: an EzAtmosScatter. Gives the sun direction, the units, and the sunlit haze colour (`atmos_haze_sun`; output Lat-long or Camera). |
 | `sunclouds` | Optional: the clouds' opacity from an orthographic camera looking along the sun (see *Sun-view clouds*). |
@@ -79,6 +79,8 @@ decimetres), and Analyze copies it from EzAtmosScatter.
 
 **cast from** picks what casts the shadows. *Clouds render* is the sheet described above. *EzCloudGen volumes* reads the `cloud_sunmap` layer of an EzCloudGen plugged into `clouds` (its **sun shadow layer** and **breakout layers** on): the clouds' optical depth towards the sun from every ground point around the camera, with their mean height. Each point in the air is then shaded by the cloud that is really above it on its sun ray, so a tall cumulus casts from its whole body, clouds above or beside the frame cast too, and the air above a low deck stays lit. **cloud height**, **use cloud depth**, the gap levels and the overscan don't apply. *Auto* picks the volumes when it finds such an EzCloudGen. Both nodes must use the same sun.
 
+*HDRI sky* casts from the clouds in a lat-long HDRI. See *HDRI sky* below.
+
 **use cloud depth** casts each cloud from the height its depth says instead of one flat **cloud height**. Use it for clouds at clearly different heights, with a good `depth.Z`. Leave it off for a single layer.
 
 **gap contrast** and **gap threshold** apply levels to the clouds' alpha before it is used, so thin or soft cloud renders give crisper beams. The defaults (1 and 0.5) change nothing, and the render itself isn't touched. Gobo Check shows the effect.
@@ -115,6 +117,20 @@ For a shot where the sun isn't ahead of the camera, ask CG for one extra render:
 
 Plug the render into `sunclouds` and the camera into `suncam`, and set **sun view width** to the width. The gobo then reads that render everywhere, and the plate's overscan no longer matters.
 
+### HDRI sky: clouds from a lat-long
+
+**cast from: HDRI sky** uses the clouds in a lat-long HDRI as the gobo, for grading an environment lit by that HDRI: sunlit patches and cloud shadows on the ground, and beams in the haze.
+
+- **hdri from** picks the sky. *Clouds input* is a lat-long plugged into `clouds`. *EzAtmosScatter* is the HDRI the atmos node is lit by (its `atmos_clouds` layer, with its output on Lat-long), already lined up with its sun.
+- **cloud key** picks what counts as cloud. *Blue Sky* keys it from the colours: blue sky and the sun's disc are clear, while grey or white cloud and the pale haze near the horizon are cloud. *Alpha* uses a matte you keyed into the HDRI's alpha (1 cloud). **gap contrast** and **gap threshold** then shape it, and Gobo Check shows the result.
+- **hdri rotation** turns the HDRI the same way as EzAtmosScatter's. With hdri from EzAtmosScatter, the atmos node's own rotation is used. **Analyze** finds the sun's disc in the HDRI and says how far it is from the sun in use. If they are off, it suggests the rotation that lines them up.
+- **hdri origin** is where the HDRI was shot from. *Camera* (the default) follows the camera. *Fixed* uses **hdri position** (Analyze sets it from the camera), so a moving camera travels under the clouds instead of carrying them along.
+- **curved earth** bends the deck around the earth, so far clouds sit lower in the sky, as they do in a real HDRI. It matters most for a low sun.
+
+**This is an approximation, not true 3D.** An HDRI stores only the direction to each cloud, not its distance. The node therefore puts the clouds on a deck at **cloud height** (the cloud base you choose, in metres) and follows each sun ray up to it. The shadows and beams are projected in 3D onto P World, and **cloud height** slides them along the sun. But the clouds have no thickness, and their placement is a plausible guess rather than where they really were. For real cloud positions, use a CG clouds render or EzCloudGen volumes.
+
+The HDRI sees the whole sky, so there is no in-frame limit: ground anywhere is shaded whether the sun is ahead, beside or behind the camera. Only a deck spot at or below the HDRI's horizon uses **outside frame**. The HDRI is shrunk to at most 4096 wide inside the node, which is plenty for the gobo and keeps it on the GPU. On the synthetic check (`reference/check_kernel.py`), the ground matte comes within 0.003 mean error of the true shadow for sun ahead, beside, behind and high. For a sun 10 degrees up it is 0.09, since the deck spots it reads lie near the horizon, where an HDRI has little detail.
+
 ## Files
 
 | Path | What it is |
@@ -122,11 +138,13 @@ Plug the render into `sunclouds` and the camera into `suncam`, and set **sun vie
 | `blink/EzCloudShafts.blink` | The kernel: gobo lookup, ground matte (output 1), shafts march (output 0). |
 | `python/build_group.py` | Writes the Group and gizmo from the kernel. Plain Python, no Nuke: `python3 python/build_group.py`. |
 | `python/node_layout.py`, `python/layout_hints.py` | Lay out the graph inside the Group (shared with EzDepthHaze). |
-| `reference/check_kernel.py` | NumPy port of the kernel, checked on a synthetic scene against the true shadow, for the clouds render and for the EzCloudGen volumes (`SUN_MAP_RES=1536` for EzCloudGen's real map size; about 5 minutes). Prints a text report. |
+| `reference/check_kernel.py` | NumPy port of the kernel, checked on a synthetic scene against the true shadow, for the clouds render, an HDRI sky and the EzCloudGen volumes (`SUN_MAP_RES=1536` for EzCloudGen's real map size; about 5 minutes; `SKIP_VOLUMES=1` skips them). Prints a text report. |
+| `python/update_kernel_hash.py` | Run in NukeX after a kernel edit: pins Nuke's kernel hash in `build_group.py`. |
+| `examples/build_demo.py` | The demo scene, including the HDRI sky comparison (`EzCloudShafts_hdri_sheet.jpg`). |
 
 Bump `VERSION` in `python/build_group.py` for each tagged release.
 
-**After editing the kernel:** the build stops until you update `KERNEL_NUKE_HASH` and `KERNEL_SOURCE_SHA256` in `python/build_group.py`. Nuke silently cancels every render through a BlinkScript whose saved kernel hash is wrong, so the hash has to come from Nuke itself:
+**After editing the kernel:** the build stops until you update `KERNEL_NUKE_HASH` and `KERNEL_SOURCE_SHA256` in `python/build_group.py`. Nuke silently cancels every render through a BlinkScript whose saved kernel hash is wrong, so the hash has to come from Nuke itself. `Nuke15.1.exe --nukex -i --gpu -t python/update_kernel_hash.py` does it, or by hand:
 
 1. Load the .blink into a BlinkScript in NukeX and recompile.
 2. Take the 5th word of its KernelDescription as `KERNEL_NUKE_HASH`.

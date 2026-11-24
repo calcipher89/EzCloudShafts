@@ -11,7 +11,8 @@ out with node_layout.py (layout_hints.py says how).
 Inputs: 0 env (the environment render with a world position layer), 1 clouds (the flattened
 clouds render: rgba + depth), 2 camera, 3 atmos (an EzAtmosScatter, optional: sun direction
 and colour), 4 sun (an Axis, optional: overrides the sun direction), 5 sunclouds (optional: the
-clouds' opacity from an orthographic camera along the sun), 6 suncam (that camera).
+clouds' opacity from an orthographic camera along the sun), 6 suncam (that camera). With 'cast from'
+HDRI sky, the clouds input (or the atmos's atmos_clouds layer) is a lat-long sky instead.
 """
 
 import base64
@@ -26,15 +27,15 @@ import layout_hints  # noqa: E402
 import node_layout  # noqa: E402
 
 # Shown on the node; bump it with each tagged release.
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 KERNEL = "EzCloudShafts"
 # Nuke's own hash of the kernel, as it saves it in KernelDescription. With a wrong one the node
 # loads with no error, but every render through it is silently cancelled, so the viewer sits
 # on "computing". The hash can't be worked out without Nuke, so it's pinned to the source it
 # came from. After editing the kernel: load the .blink in a BlinkScript in NukeX, recompile,
 # take the 5th word of its KernelDescription, and update both of these.
-KERNEL_SOURCE_SHA256 = "ef202a311bf196615b2899b6b28c8a9400ab510fa30c1058b7bca243cb34f951"
-KERNEL_NUKE_HASH = "67d872eeac81e9d07e28e119c87f04ed446eddbcd0a341d9acdc54fc8533999c"
+KERNEL_SOURCE_SHA256 = "61e6e308e02d6e0aa5612cb9f9326c32286668d65287332a3af4b22425e48aa1"
+KERNEL_NUKE_HASH = "1ade50c6555b31b8aabfed2a2b45b73857c72187af423529b029ffda4d4ab068"
 # The soften kernel, pinned the same way.
 SOFTEN_KERNEL = "EzCloudShaftsSoften"
 SOFTEN_SOURCE_SHA256 = "ab1c6cd45fdaa9f53d370f2a251842258cbc01eddfe4d7c824f9181d74c11d38"
@@ -52,7 +53,8 @@ LAYERS = {"P": ["red", "green", "blue"],
           "atmos_haze_sun": ["red", "green", "blue"],
           "atmos_haze_sky": ["red", "green", "blue"],
           "shafts_haze": ["red", "green", "blue"],
-          "cloud_sunmap": ["red", "green", "blue"]}
+          "cloud_sunmap": ["red", "green", "blue"],
+          "atmos_clouds": ["red", "green", "blue", "alpha"]}
 
 # Kernel parameters, in the kernel's order: (name, variable, type, count, default).
 PARAMS = [
@@ -99,6 +101,10 @@ PARAMS = [
     ("use_sun_map", "useSunMap", "Int", 1, 0),
     ("sun_map_size", "sunMapSize", "Float", 1, 10000.0),
     ("ground_height", "groundHeight", "Float", 1, 0.0),
+    ("use_hdri", "useHdri", "Int", 1, 0),
+    ("hdri_rotation", "hdriRotation", "Float", 1, 0.0),
+    ("hdri_origin", "hdriOrigin", "Float", 3, (0, 0, 0)),
+    ("earth_radius", "earthRadius", "Float", 1, 6371000.0),
 ]
 LOCALS = [("pi", 1), ("sunWorld", 3), ("sunX", 3), ("sunY", 3)]
 IMAGES = [("pos", "Read", "Point"), ("clouds", "Read", "Random"), ("envSun", "Read", "Random"),
@@ -211,13 +217,17 @@ if cam is None:
     notes.append('No camera in the camera input: connect the shot camera.')
 if env is None:
     notes.append('Nothing in the env input.')
-if clouds is None:
+hdri = bool(n['hdri_on'].value())
+hdri_atmos = hdri and int(n['hdri_from'].getValue()) == 1
+if clouds is None and not hdri_atmos:
     notes.append('Nothing in the clouds input.')
 
 # warns: (rank, text), the most important first; the top one becomes the status line.
 warns = []
-if cam is None or env is None or clouds is None:
-    warns.append((0, 'An input is missing: connect env, clouds and camera.'))
+if cam is None or env is None or (clouds is None and not hdri_atmos):
+    warns.append((0, 'An input is missing: connect env, %s and camera.' % ('the HDRI (clouds)' if hdri else 'clouds')))
+if hdri_atmos and atmos is None:
+    warns.append((0, 'hdri from is EzAtmosScatter, but there is no atmos node in the atmos input.'))
 
 # Find the world position and sun light layers by their usual names.
 if env is not None:
@@ -251,7 +261,69 @@ gen = bool(n['gen_on'].value())
 if gen:
     notes.append('Casting from the EzCloudGen volumes (its cloud_sunmap layer): cloud height and the gobo '
                  'coverage do not apply, and every cloud casts, in frame or not.')
-if cam is not None and clouds is not None and not gen:
+if hdri:
+    notes.append('Casting from an HDRI sky: the clouds sit on a deck at cloud height %.0f m (an HDRI holds no '
+                 'distances, so set it to the cloud base you want). Every direction casts, so there is no gobo '
+                 'coverage limit.' % n['cloud_height'].value())
+    if hdri_atmos and atmos is not None and atmos.knob('output_mapping') and int(atmos['output_mapping'].getValue()) != 0:
+        warns.append((1, 'Set %s output to Lat-long: its atmos_clouds layer is the HDRI only then.' % atmos.name()))
+    if not hdri_atmos and atmos is not None and atmos.knob('hdri_rotation'):
+        ar = atmos['hdri_rotation'].getValueAt(frame)
+        if abs(ar - n['hdri_rotation'].value()) > 0.5:
+            notes.append('%s has hdri rotation %.1f, this node %.1f. If it is the same HDRI, they should match.'
+                         % (atmos.name(), ar, n['hdri_rotation'].value()))
+    if cam is not None and int(n['hdri_origin'].getValue()) == 1:
+        m = [cam['world_matrix'].getValueAt(frame, i) for i in range(16)]
+        n['hdri_position'].setValue([m[3], m[7], m[11]])
+        notes.append('HDRI position set from the camera at frame %d.' % frame)
+    # The sun's disc in the HDRI should be where the sun in use is: a check of the hdri rotation.
+    src = n.node('HdriShrink')
+    if src is not None and src.width() > 8:
+        w, h = src.width(), src.height()
+        if abs(w - 2 * h) > 0.05 * w:
+            warns.append((1, 'The HDRI is %dx%d, not a 2:1 lat-long.' % (w, h)))
+        best, bx, by, total = -1.0, 0, 0, 0.0
+        # Box averages over a grid of the upper half, so a sun disc a few pixels wide still shows.
+        nx, ny = 128, 32
+        bw, bh = float(w) / nx, h * 0.5 / ny
+        for j in range(ny):
+            py = h * 0.5 + (j + 0.5) * bh
+            for i in range(nx):
+                px = (i + 0.5) * bw
+                lum = (0.2126 * src.sample('rgba.red', px, py, bw, bh) + 0.7152 * src.sample('rgba.green', px, py, bw, bh) +
+                       0.0722 * src.sample('rgba.blue', px, py, bw, bh))
+                total += lum
+                if lum > best:
+                    best, bx, by = lum, px, py
+        lon = (bx / w - 0.5) * 2 * math.pi + math.radians(n['hdri_rotation_in_use'].getValueAt(frame))
+        lat = (by / h - 0.5) * math.pi
+        disc = [math.cos(lat) * math.sin(lon), math.sin(lat), -math.cos(lat) * math.cos(lon)]
+        sun = [n['sun_in_use'].getValueAt(frame, i) for i in range(3)]
+        rot = math.radians(-n['sun_rotation_in_use'].getValueAt(frame))
+        sun = [sun[0] * math.cos(rot) + sun[2] * math.sin(rot), sun[1], -sun[0] * math.sin(rot) + sun[2] * math.cos(rot)]
+        norm = math.sqrt(sum(v * v for v in sun)) or 1.0
+        off = math.degrees(math.acos(max(-1.0, min(1.0, sum(disc[i] * sun[i] / norm for i in range(3))))))
+        dlon = (math.degrees(math.atan2(disc[0], -disc[2]) - math.atan2(sun[0], -sun[2])) + 180.0) % 360.0 - 180.0
+        mean = total / (nx * ny)
+        if best < 4 * mean:
+            notes.append('No clear sun disc in the HDRI (brightest spot %.1fx the mean), so the hdri rotation was not '
+                         'checked.' % (best / max(mean, 1e-6)))
+        elif off > 5:
+            # Rotation only turns the HDRI around +Y: it fixes the sideways gap, not the height.
+            delev = math.degrees(math.asin(max(-1.0, min(1.0, disc[1]))) - math.asin(max(-1.0, min(1.0, sun[1] / norm))))
+            text = []
+            if abs(dlon) > 3:
+                text.append('%.0f deg %s of the sun in use: try hdri rotation %.1f'
+                            % (abs(dlon), 'right' if dlon > 0 else 'left',
+                               n['hdri_rotation_in_use'].getValueAt(frame) - dlon))
+            if abs(delev) > 3:
+                text.append('%.0f deg %s than the sun in use, which hdri rotation cannot fix: light the scene from '
+                            'the HDRI\'s sun, or expect the shadows to fall at another angle than the HDRI suggests'
+                            % (abs(delev), 'higher' if delev > 0 else 'lower'))
+            warns.append((1, 'The HDRI\'s sun is ' + '; and '.join(text) + '.'))
+        else:
+            notes.append('The HDRI\'s sun disc is %.1f deg from the sun in use: lined up.' % off)
+if cam is not None and clouds is not None and not gen and not hdri:
     m = [cam['world_matrix'].getValueAt(frame, i) for i in range(16)]
     focal = cam['focal'].getValueAt(frame)
     hap = cam['haperture'].getValueAt(frame)
@@ -396,6 +468,9 @@ if cam is not None:
     notes.append('Sun %.0f deg up, %.0f deg %s of where the camera looks.' % (elev, abs(az), 'right' if az > 0 else 'left'))
     if elev <= 0:
         warns.append((1, 'The sun is below the horizon (%.0f deg): no beams can form.' % elev))
+    elif hdri and abs(az) > 60:
+        notes.append('The sun is %.0f deg off where the camera looks: the ground shadows work, the beams will be faint.'
+                     % abs(az))
     elif abs(az) > 120:
         warns.append((2, 'The sun is behind the camera (%.0f deg off): beams run away from the lens and the gobo '
                          'cannot reach. A sun-view clouds render would fix it.' % abs(az)))
@@ -432,6 +507,11 @@ if warns:
         notes.append('Warning: ' + text)
 nuke.message('EzCloudShafts analyze\n\n' + '\n'.join(notes))
 '''
+# In a function: a button's script runs in the script's own Python namespace, and its names
+# (hdri, rot, n...) must not overwrite the caller's.
+ANALYZE_KNOB = ("def _ezcs_analyze():\n" + "".join(("    " + line if line.strip() else "") + "\n"
+                                                    for line in ANALYZE.strip("\n").splitlines()) +
+                "_ezcs_analyze()\n")
 
 
 # ---- The breakout button -----------------------------------------------------------------
@@ -629,7 +709,8 @@ BAKE_WATCH = ["position_layer", "scene_scale", "sun_from", "sun_direction", "clo
               "shadow_strength", "gap_contrast", "gap_threshold", "outside_frame", "penumbra", "samples", "drift_x",
               "drift_z", "drift_frame", "shaft_density", "haze_height", "shaft_start", "max_distance", "sky_distance",
               "march_steps", "color_from", "shaft_color", "shaft_intensity", "soften", "edge_aware",
-              "use_cloud_depth", "sun_view_width",
+              "use_cloud_depth", "sun_view_width", "cast_from", "hdri_from", "sky_key", "hdri_rotation",
+              "hdri_origin", "hdri_position", "curved_earth",
               "render_resolution", "shafts_resolution"]
 
 BAKE_HASH = ("import hashlib\n"
@@ -736,7 +817,7 @@ def knob_lines():
     add('addUserKnob {22 analyze t %s T %s +STARTLINE}'
         % (q("Reads the cloud height from the clouds' depth (the median of the cloudy pixels), takes the "
              "units from the EzAtmosScatter in 'atmos', and reports how much of the ground the gobo reaches. "
-             "Run it at a frame where the clouds are in view."), q(ANALYZE)))
+             "Run it at a frame where the clouds are in view."), q(ANALYZE_KNOB)))
     add('addUserKnob {4 view t %s -STARTLINE M {Passthrough "Shafts Over Env" "Shadow Matte" "Gobo Check" '
         '"Shafts Matte" "Lit Share" Comp}}'
         % q("What the main rgb shows. The passes are always written to the shafts and cloudshadow layers; "
@@ -794,12 +875,38 @@ def knob_lines():
     add('addUserKnob {7 sun_rotation_in_use l "sun rotation" +INVISIBLE}')
 
     add('addUserKnob {26 clouds_divider l "Cloud gobo"}')
-    add('addUserKnob {4 cast_from l "cast from" t %s M {Auto "Clouds render" "EzCloudGen volumes"}}'
+    add('addUserKnob {4 cast_from l "cast from" t %s M {Auto "Clouds render" "EzCloudGen volumes" "HDRI sky"}}'
         % q("What casts the shadows. Clouds render: the clouds input's alpha, as a sheet at 'cloud height' "
             "(or the sunclouds render). EzCloudGen volumes: the cloud_sunmap layer of an EzCloudGen in the "
             "clouds input, so rays and ground shadows come from the real volumes: tall clouds, and clouds above "
             "or beside the frame, cast as they should, and 'cloud height' isn't used. Auto picks the volumes "
-            "when the clouds input is an EzCloudGen with 'sun shadow layer' and 'breakout layers' on."))
+            "when the clouds input is an EzCloudGen with 'sun shadow layer' and 'breakout layers' on. "
+            "HDRI sky: the clouds in a lat-long HDRI (see 'hdri from'), put on a deck at 'cloud height'. The "
+            "HDRI sees all round, so clouds anywhere in the sky cast, but it holds no distances: the deck height "
+            "is your guess, and the shadows are a plausible placement, not the clouds' true one."))
+    add('addUserKnob {4 hdri_from l "hdri from" t %s M {"Clouds input" EzAtmosScatter}}'
+        % q("With cast from HDRI sky. Clouds input: a lat-long HDRI plugged into 'clouds'. EzAtmosScatter: the "
+            "HDRI the atmos node is lit by (its atmos_clouds layer, output as Lat-long), already lined up with "
+            "its sun and hdri rotation."))
+    add('addUserKnob {4 sky_key l "cloud key" t %s -STARTLINE M {"Blue Sky" Alpha}}'
+        % q("What in the HDRI is cloud. Blue Sky: keyed from the colours: blue sky and the sun's disc let the sun "
+            "through, grey or white cloud and the pale haze near the horizon don't. Alpha: a matte you keyed "
+            "yourself into the HDRI's alpha, 1 cloud, 0 clear. 'gap contrast' and 'gap threshold' then shape it."))
+    add('addUserKnob {7 hdri_rotation l "hdri rotation" t %s R -180 180}'
+        % q("Turns the HDRI around +Y, in degrees, the same way as EzAtmosScatter's hdri rotation: match it to "
+            "the atmos node (or the sky dome) so the clouds line up with the sun. Not used with hdri from "
+            "EzAtmosScatter, which uses the atmos node's own. Analyze checks it against the sun's disc."))
+    add('addUserKnob {7 hdri_rotation_in_use +INVISIBLE}')
+    add('addUserKnob {4 hdri_origin l "hdri origin" t %s M {Camera Fixed}}'
+        % q("Where the HDRI was shot from. Camera: the camera's position on each frame, for a still or slow "
+            "camera. Fixed: 'hdri position', so a moving camera travels under the clouds instead of carrying "
+            "them along. Analyze sets hdri position from the camera on the current frame."))
+    add('addUserKnob {13 hdri_position l "hdri position" t %s}'
+        % q("Where the HDRI was shot from, in scene units, with hdri origin Fixed."))
+    add('addUserKnob {6 curved_earth l "curved earth" t %s +STARTLINE}'
+        % q("Bends the cloud deck around the earth, so far clouds sit lower in the sky, as in the HDRI. Off is a "
+            "flat deck. It matters mostly for a low sun."))
+    add('curved_earth true')
     add('addUserKnob {7 cloud_height l "cloud height (m)" t %s R 0 8000}'
         % q("Height of the cloud sheet above the scene's 0, in metres. Analyze measures it from the clouds' "
             "depth; raise or lower it to slide the shadows along the sun."))
@@ -826,7 +933,8 @@ def knob_lines():
     add('shadow_strength 1')
     add('addUserKnob {4 outside_frame l "outside frame" t %s M {Lit Shadowed}}'
         % q("Where the sun ray meets the cloud sheet outside the clouds render (past its overscan), as the "
-            "camera sees it: count it as a gap (Lit) or as cloud (Shadowed)."))
+            "camera sees it: count it as a gap (Lit) or as cloud (Shadowed). With an HDRI sky: where the deck "
+            "spot is at or below the HDRI's horizon."))
     add('addUserKnob {7 penumbra l "softness (deg)" t %s R 0 5}'
         % q("Spreads the sun over a cone this wide, so shadow edges soften the further they fall from the "
             "cloud. The real sun is about 0.27."))
@@ -982,6 +1090,9 @@ def knob_lines():
     add('gen_ground {{%s}}' % q(py_expr(FIND_GEN + "ret = e['ground_height'].value() if e is not None else 0")))
     add('addUserKnob {3 gen_on +INVISIBLE}')
     add('gen_on {{"cast_from==2 || (cast_from==0 && gen_found)"}}')
+    # Casting from an HDRI sky.
+    add('addUserKnob {3 hdri_on +INVISIBLE}')
+    add('hdri_on {{"cast_from==3"}}')
     # 0 manual, 1 Axis, 2 atmos.
     add('addUserKnob {3 sun_source +INVISIBLE}')
     add('sun_source {{"sun_from==1 ? (axis_found ? 1 : 0) : sun_from==2 ? (atm_found ? 2 : 0) : '
@@ -995,6 +1106,7 @@ def group_expressions():
         '{"sun_source==1 ? axis_position.%s : sun_source==2 ? atm_sun.%s : sun_direction.%s"}' % (c, c, c)
         for c in "xyz")]
     lines.append('sun_rotation_in_use {{"sun_source==2 ? atm_rotation : 0"}}')
+    lines.append('hdri_rotation_in_use {{"hdri_from==1 && atm_found ? atm_rotation : hdri_rotation"}}')
     return lines
 
 
@@ -1059,6 +1171,11 @@ def blink_node(name, output, source, work, overrides=None):
         "use_sun_map": "{parent.gen_on}",
         "sun_map_size": "{parent.gen_map_size}",
         "ground_height": "{parent.gen_ground}",
+        "use_hdri": "{parent.hdri_on}",
+        "hdri_rotation": "{parent.hdri_rotation_in_use}",
+        "hdri_origin": " ".join('{"parent.hdri_origin==0 ? parent.cam_world_matrix.%d : parent.hdri_position.%s"}'
+                                % (i, c) for i, c in ((3, "x"), (7, "y"), (11, "z"))),
+        "earth_radius": '{"parent.curved_earth ? 6371000 : 0"}',
     }
     links.update(overrides or {})
     assert set(links) == set(p[0] for p in PARAMS), set(p[0] for p in PARAMS) ^ set(links)
@@ -1128,7 +1245,27 @@ def nodes(source):
         ("CloudsOrNone", "Switch", ["NoClouds", "clouds"], ["inputs 2", 'which {{"\\[exists parent.input1]"}}']),
         # Levels on the gobo: the render itself isn't touched, only what the passes read.
         ("GoboDepth", "Shuffle2", ["CloudsOrNone"], depth_pick()),
-        ("GoboLevels", "Expression", ["GoboDepth"],
+        # Cast from an HDRI sky: the lat-long (the clouds input, or the atmos's own HDRI), at most
+        # 4096 wide so it fits on the GPU, with the cloud keyed into alpha.
+        ("AtmosCloudsPick", "Shuffle2", ["atmos"], ["fromInput1 {{0} B}", "in1 atmos_clouds", "fromInput2 {{0} B}",
+                                                    'mappings "4 %s"' % " ".join(
+                                                        "atmos_clouds.%s 0 %d rgba.%s 0 %d" % (c, i, c, i)
+                                                        for i, c in enumerate(("red", "green", "blue", "alpha")))]),
+        ("HdriOrNone", "Switch", ["CloudsOrNone", "AtmosCloudsPick"],
+         ["inputs 2", 'which {{"parent.hdri_from==1 && parent.atm_found"}}']),
+        ("HdriShrink", "Reformat", ["HdriOrNone"],
+         ['type "to box"', 'box_width {{"min(HdriOrNone.width, 4096)"}}',
+          'box_height {{"max(floor(HdriOrNone.height * min(HdriOrNone.width, 4096) / max(HdriOrNone.width, 1) + 0.5), 1)"}}',
+          "box_fixed true", "resize distort", "filter Mitchell"]),
+        # Blue sky (and the sun's disc, far brighter than cloud) is clear; grey or white cloud and
+        # the pale haze near the horizon are cloud. Or the HDRI's own alpha.
+        ("HdriKey", "Expression", ["HdriShrink"],
+         ["channel0 none", "channel1 none", "channel2 none", "channel3 alpha",
+          'expr3 "parent.sky_key==1 ? clamp(a,0,1) : 1-max(clamp((b-r)/max(b,0.0001)*3,0,1)*'
+          'clamp((sin(((y+0.5)/height-0.5)*3.14159265)-0.05)/0.15,0,1), '
+          'clamp((0.2126*r+0.7152*g+0.0722*b)/50-1,0,1))"']),
+        ("GoboPick", "Switch", ["GoboDepth", "HdriKey"], ["inputs 2", "which {{parent.hdri_on}}"]),
+        ("GoboLevels", "Expression", ["GoboPick"],
          ["channel0 none", "channel1 none", "channel2 none", "channel3 alpha",
           'expr3 "clamp(0.5+(a-parent.gap_threshold)*parent.gap_contrast,0,1)"']),
         ("NoSunClouds", "Constant", [], ["inputs 0", "format " + tiny]),
