@@ -309,8 +309,18 @@ if hdri:
             notes.append('No clear sun disc in the HDRI (brightest spot %.1fx the mean), so the hdri rotation was not '
                          'checked.' % (best / max(mean, 1e-6)))
         elif off > 5:
-            warns.append((1, 'The HDRI\'s sun is %.0f deg from the sun in use: try hdri rotation %.1f.'
-                             % (off, n['hdri_rotation_in_use'].getValueAt(frame) - dlon)))
+            # Rotation only turns the HDRI around +Y: it fixes the sideways gap, not the height.
+            delev = math.degrees(math.asin(max(-1.0, min(1.0, disc[1]))) - math.asin(max(-1.0, min(1.0, sun[1] / norm))))
+            text = []
+            if abs(dlon) > 3:
+                text.append('%.0f deg %s of the sun in use: try hdri rotation %.1f'
+                            % (abs(dlon), 'right' if dlon > 0 else 'left',
+                               n['hdri_rotation_in_use'].getValueAt(frame) - dlon))
+            if abs(delev) > 3:
+                text.append('%.0f deg %s than the sun in use, which hdri rotation cannot fix: light the scene from '
+                            'the HDRI\'s sun, or expect the shadows to fall at another angle than the HDRI suggests'
+                            % (abs(delev), 'higher' if delev > 0 else 'lower'))
+            warns.append((1, 'The HDRI\'s sun is ' + '; and '.join(text) + '.'))
         else:
             notes.append('The HDRI\'s sun disc is %.1f deg from the sun in use: lined up.' % off)
 if cam is not None and clouds is not None and not gen and not hdri:
@@ -497,6 +507,11 @@ if warns:
         notes.append('Warning: ' + text)
 nuke.message('EzCloudShafts analyze\n\n' + '\n'.join(notes))
 '''
+# In a function: a button's script runs in the script's own Python namespace, and its names
+# (hdri, rot, n...) must not overwrite the caller's.
+ANALYZE_KNOB = ("def _ezcs_analyze():\n" + "".join(("    " + line if line.strip() else "") + "\n"
+                                                    for line in ANALYZE.strip("\n").splitlines()) +
+                "_ezcs_analyze()\n")
 
 
 # ---- The breakout button -----------------------------------------------------------------
@@ -802,7 +817,7 @@ def knob_lines():
     add('addUserKnob {22 analyze t %s T %s +STARTLINE}'
         % (q("Reads the cloud height from the clouds' depth (the median of the cloudy pixels), takes the "
              "units from the EzAtmosScatter in 'atmos', and reports how much of the ground the gobo reaches. "
-             "Run it at a frame where the clouds are in view."), q(ANALYZE)))
+             "Run it at a frame where the clouds are in view."), q(ANALYZE_KNOB)))
     add('addUserKnob {4 view t %s -STARTLINE M {Passthrough "Shafts Over Env" "Shadow Matte" "Gobo Check" '
         '"Shafts Matte" "Lit Share" Comp}}'
         % q("What the main rgb shows. The passes are always written to the shafts and cloudshadow layers; "
