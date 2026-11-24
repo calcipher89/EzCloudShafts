@@ -34,8 +34,8 @@ KERNEL = "EzCloudShafts"
 # on "computing". The hash can't be worked out without Nuke, so it's pinned to the source it
 # came from. After editing the kernel: load the .blink in a BlinkScript in NukeX, recompile,
 # take the 5th word of its KernelDescription, and update both of these.
-KERNEL_SOURCE_SHA256 = "ef202a311bf196615b2899b6b28c8a9400ab510fa30c1058b7bca243cb34f951"
-KERNEL_NUKE_HASH = "67d872eeac81e9d07e28e119c87f04ed446eddbcd0a341d9acdc54fc8533999c"
+KERNEL_SOURCE_SHA256 = "61e6e308e02d6e0aa5612cb9f9326c32286668d65287332a3af4b22425e48aa1"
+KERNEL_NUKE_HASH = "1ade50c6555b31b8aabfed2a2b45b73857c72187af423529b029ffda4d4ab068"
 # The soften kernel, pinned the same way.
 SOFTEN_KERNEL = "EzCloudShaftsSoften"
 SOFTEN_SOURCE_SHA256 = "ab1c6cd45fdaa9f53d370f2a251842258cbc01eddfe4d7c824f9181d74c11d38"
