@@ -299,8 +299,6 @@ if hdri:
         lat = (by / h - 0.5) * math.pi
         disc = [math.cos(lat) * math.sin(lon), math.sin(lat), -math.cos(lat) * math.cos(lon)]
         sun = [n['sun_in_use'].getValueAt(frame, i) for i in range(3)]
-        rot = math.radians(-n['sun_rotation_in_use'].getValueAt(frame))
-        sun = [sun[0] * math.cos(rot) + sun[2] * math.sin(rot), sun[1], -sun[0] * math.sin(rot) + sun[2] * math.cos(rot)]
         norm = math.sqrt(sum(v * v for v in sun)) or 1.0
         off = math.degrees(math.acos(max(-1.0, min(1.0, sum(disc[i] * sun[i] / norm for i in range(3))))))
         dlon = (math.degrees(math.atan2(disc[0], -disc[2]) - math.atan2(sun[0], -sun[2])) + 180.0) % 360.0 - 180.0
@@ -372,9 +370,6 @@ if cam is not None and clouds is not None and not gen and not hdri:
         layer = n['position_layer'].value()
         if env is not None and layer + '.red' in env.channels():
             sun = [n['sun_in_use'].getValueAt(frame, i) for i in range(3)]
-            rot = math.radians(-n['sun_rotation_in_use'].getValueAt(frame))
-            sun = [sun[0] * math.cos(rot) + sun[2] * math.sin(rot), sun[1],
-                   -sun[0] * math.sin(rot) + sun[2] * math.cos(rot)]
             norm = math.sqrt(sum(s * s for s in sun)) or 1.0
             sun = [s / norm for s in sun]
             h = n['cloud_height'].value()
@@ -457,9 +452,6 @@ if cam is not None and clouds is not None and not gen and not hdri:
 if cam is not None:
     m = [cam['world_matrix'].getValueAt(frame, i) for i in range(16)]
     sun = [n['sun_in_use'].getValueAt(frame, i) for i in range(3)]
-    rot = math.radians(-n['sun_rotation_in_use'].getValueAt(frame))
-    sun = [sun[0] * math.cos(rot) + sun[2] * math.sin(rot), sun[1],
-           -sun[0] * math.sin(rot) + sun[2] * math.cos(rot)]
     norm = math.sqrt(sun[0] ** 2 + sun[1] ** 2 + sun[2] ** 2) or 1.0
     sun = [v / norm for v in sun]
     elev = math.degrees(math.asin(max(-1.0, min(1.0, sun[1]))))
@@ -872,7 +864,6 @@ def knob_lines():
     add('sun_direction {0 0.5 -1}')
     add('addUserKnob {13 sun_in_use l "sun in use" t %s +DISABLED}'
         % q("The sun direction in use, whichever 'sun from' picked. Read only."))
-    add('addUserKnob {7 sun_rotation_in_use l "sun rotation" +INVISIBLE}')
 
     add('addUserKnob {26 clouds_divider l "Cloud gobo"}')
     add('addUserKnob {4 cast_from l "cast from" t %s M {Auto "Clouds render" "EzCloudGen volumes" "HDRI sky"}}'
@@ -1105,9 +1096,6 @@ def group_expressions():
     lines = ['sun_in_use {%s}' % " ".join(
         '{"sun_source==1 ? axis_position.%s : sun_source==2 ? atm_sun.%s : sun_direction.%s"}' % (c, c, c)
         for c in "xyz")]
-    # EzAtmosScatter's 'sun in use' is already in world space: its light probe measures the sun
-    # from the HDRI turned by its hdri rotation. Turning it again put the sun off by that angle.
-    lines.append('sun_rotation_in_use 0')
     lines.append('hdri_rotation_in_use {{"hdri_from==1 && atm_found ? atm_rotation : hdri_rotation"}}')
     return lines
 
@@ -1143,7 +1131,10 @@ def blink_node(name, output, source, work, overrides=None):
         "clouds_overscan": '{"max(0, (CloudsOrNone.width - PositionPick.width) / 2)"} '
                            '{"max(0, (CloudsOrNone.height - PositionPick.height) / 2)"}',
         "sun_direction": "{parent.sun_in_use.x} {parent.sun_in_use.y} {parent.sun_in_use.z}",
-        "sun_rotation": "{parent.sun_rotation_in_use}",
+        # EzAtmosScatter's 'sun in use' is already in world space (its light probe measures the sun
+        # from the HDRI turned by its hdri rotation), so no sun is turned again here. Not a knob, so
+        # an older node's saved rotation expression can't bring the double turn back.
+        "sun_rotation": "0",
         "cloud_height": "{parent.cloud_height}",
         "cloud_density": "{parent.cloud_density}",
         "shadow_strength": "{parent.shadow_strength}",
