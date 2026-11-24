@@ -3,7 +3,12 @@
 Run with NukeX (the passes are BlinkScript):
 
     Nuke15.1.exe --nukex -i -t examples/build_demo.py            # build and save the script
-    Nuke15.1.exe --nukex -i -t examples/build_demo.py --render   # also render the contact sheet
+    Nuke15.1.exe --nukex -i -t examples/build_demo.py --render   # also render the contact sheets
+
+A second part casts from an HDRI sky (cast from: HDRI sky): a synthetic lat-long of the same
+cloud sheet, seen from the camera, with blue sky, grey cloud and a sun disc. Its sheet,
+EzCloudShafts_hdri_sheet.jpg, sets it beside the clouds-render gobo, also with the sun behind
+the camera, where the clouds render can't reach and the HDRI still casts.
 
 Everything in the script is made with Nuke nodes: the "renders" are ray casts in Expression
 nodes, so the .nk reads no files. The scene is in decimetres (units to metres 0.1).
@@ -56,6 +61,12 @@ SETTINGS = {"view": "Shafts Over Env", "scene_scale": 0.1, "cloud_height": CLOUD
             "shaft_density": 0.25, "haze_height": 1.2, "sky_distance": 20.0,
             "march_steps": 96, "samples": 8, "penumbra": 0.5, "shaft_intensity": 0.3,
             "shafts_resolution": "Same"}
+
+# The sun behind the camera, for the HDRI comparison: 30 deg up, 160 deg round from ahead.
+SUN_BEHIND = (math.cos(math.radians(30)) * math.sin(math.radians(160)), math.sin(math.radians(30)),
+              -math.cos(math.radians(30)) * math.cos(math.radians(160)))
+HDRI_SETTINGS = dict(SETTINGS, cast_from="HDRI sky", hdri_from="Clouds input", sky_key="Blue Sky",
+                     hdri_rotation=0.0, hdri_origin="Camera", curved_earth=False)
 
 # ---- Layout (nuke-node-layout grid) -------------------------------------------------------
 COL, ROW = 150, 48
@@ -235,6 +246,39 @@ def cloud_shade(src):
                       label="premultiplied cloud colour")
 
 
+def hdri_hit(src):
+    """Lat-long rays from the camera meet the (flat) sheet: r, g = x, z in km like CloudHit."""
+    lon = "(((x+0.5)/width-0.5)*2*pi)"
+    lat = "(((y+0.5)/height-0.5)*pi)"
+    return expression(
+        "HdriHit", src,
+        ["dy>0.003?cos(%s)*sin(%s)*tt/1000:0" % (lat, lon), "dy>0.003?-cos(%s)*cos(%s)*tt/1000:0" % (lat, lon),
+         "0", "dy>0.003?1:0"],
+        temps=[("dy", "sin(%s)" % lat), ("tt", "dy>0.003?%g/dy:0" % (CLOUD_H - CAM_Y))],
+        label="lat-long rays meet the sheet: r, g = x, z in km, a = sheet above the horizon")
+
+
+def hdri_shade(src):
+    """Blue sky, grey-white cloud by alpha, pale haze at the horizon and the sun's disc."""
+    lon = "(((x+0.5)/width-0.5)*2*pi)"
+    lat = "(((y+0.5)/height-0.5)*pi)"
+    sky, cloud, low = (0.22, 0.38, 0.72), (0.78, 0.76, 0.74), (0.8, 0.82, 0.85)
+    ground = (0.12, 0.11, 0.09)
+    exprs = []
+    for i in range(3):
+        top = "mix(%g,%g,smoothstep(0,0.3,dy))" % (low[i], sky[i])
+        lit = "mix(%s,%g*(0.7+0.5*smoothstep(0.995,1,sd)),a)" % (top, cloud[i])
+        exprs.append("dy<0?%g:%s+(1-a)*(2000*smoothstep(0.99996,0.99999,sd)+0.6*pow(max(sd,0),200))"
+                     % (ground[i], lit))
+    exprs.append("a")
+    return expression(
+        "HdriShade", src, exprs,
+        temps=[("dy", "sin(%s)" % lat),
+               ("sd", "cos(%s)*sin(%s)*%.8f+sin(%s)*%.8f-cos(%s)*cos(%s)*%.8f"
+                % (lat, lon, SUN[0], lat, SUN[1], lat, lon, SUN[2]))],
+        label="sky, cloud, sun disc; alpha = cloud (not used: Blue Sky key)")
+
+
 def build():
     nuke.scriptClear()
     root = nuke.root()
@@ -381,6 +425,85 @@ def build():
     viewer.setInput(0, shafts)
     place(viewer, -2, 14)
 
+    # ---- HDRI sky: the same sheet as a lat-long from the camera -------------------------------
+    hx = 10
+    h_fmt = nuke.nodes.Constant(name="SkyLatlongFormat", channels="rgba")
+    h_fmt["format"].setValue(nuke.addFormat("2048 1024 1 EzCloudShafts_demo_sky"))
+    place(h_fmt, hx, 0)
+    h_hit = place(hdri_hit(h_fmt), hx, 1)
+    h_cover = place(cloud_cover(h_hit), hx, 2)
+    h_cover.setName("HdriCover")
+    h_holes = place(cloud_holes(h_cover), hx, 3)
+    h_holes.setName("HdriHoles")
+    h_sky = place(hdri_shade(h_holes), hx, 4)
+    h_dot = dot(h_sky, hx, 10)
+
+    env_rail = dot(env_over, -1, 9)
+    hdri_nodes = []
+    h_clouds_dot = dot(h_dot, hx, 11)
+    for i, (name, settings, clouds, sun) in enumerate((
+            ("EzCloudShafts_HDRI", HDRI_SETTINGS, h_clouds_dot, None),
+            ("EzCloudShafts_HDRI_SunBehind", HDRI_SETTINGS, h_clouds_dot, SUN_BEHIND),
+            ("EzCloudShafts_Render_SunBehind", SETTINGS, clouds_dot, SUN_BEHIND))):
+        col = hx + 1 + i
+        node = paste(SHAFTS_GROUP, name)
+        for knob, value in settings.items():
+            node[knob].setValue(value)
+        if sun is not None:
+            node["sun_from"].setValue("Manual")
+            node["sun_direction"].setValue(list(sun))
+        node.setInput(0, env_rail)
+        node.setInput(1, clouds)
+        node.setInput(2, camera)
+        node.setInput(3, atmos)
+        if sun is None:
+            node.setInput(4, sun_dot)
+        place(node, col, 12)
+        hdri_nodes.append(node)
+
+    h_panels = [("HDRI sky (lat-long)", h_sky),
+                ("Shafts Over Env: HDRI sky", hdri_nodes[0]),
+                ("cloudshadow.alpha: HDRI sky", ("cloudshadow", hdri_nodes[0])),
+                ("cloudshadow.alpha: clouds render", ("cloudshadow", shafts)),
+                ("sun behind camera: HDRI sky", ("cloudshadow", hdri_nodes[1])),
+                ("sun behind camera: clouds render", ("cloudshadow", hdri_nodes[2]))]
+    h_labelled = []
+    h_sheet_nodes = []
+    for i, (title, src) in enumerate(h_panels):
+        col = hx + i
+        if isinstance(src, tuple):
+            src = place(to_rgb("HdriCheck%d" % (i + 1), src[1], src[0], ("alpha",) * 3, label=title), col, 16)
+            h_sheet_nodes.append(src)
+        rf = nuke.nodes.Reformat(name="HdriPanel%d" % (i + 1), type="to box", box_width=960, box_height=540,
+                                 box_fixed=True, resize="distort", black_outside=True)
+        rf.setInput(0, src)
+        place(rf, col, 18)
+        bar = nuke.nodes.Rectangle(name="HdriLabelBar%d" % (i + 1), color=0, opacity=0.7)
+        bar["area"].setValue([0, 476, 960, 540])
+        bar.setInput(0, rf)
+        place(bar, col, 19)
+        tx = nuke.nodes.Text2(name="HdriLabel%d" % (i + 1), message=title)
+        tx["box"].setValue([24, 480, 936, 530])
+        tx["yjustify"].setValue("center")
+        tx["global_font_scale"].setValue(0.34)
+        tx.setInput(0, bar)
+        place(tx, col, 20)
+        h_labelled.append(tx)
+        h_sheet_nodes += [rf, bar, tx]
+    h_sheet = nuke.nodes.ContactSheet(name="HdriContactSheet", width=2880, height=1080, rows=2, columns=3, gap=0,
+                                      roworder="TopBottom", colorder="LeftRight", center=True)
+    for i, tx in enumerate(h_labelled):
+        h_sheet.setInput(i, tx)
+    place(h_sheet, hx, 22)
+    h_write = nuke.nodes.Write(name="WriteHdriSheet", file_type="jpeg", channels="rgb")
+    h_write["file"].fromUserText("[file dirname [value root.name]]/EzCloudShafts_hdri_sheet.jpg")
+    h_write["_jpeg_quality"].setValue(0.92)
+    h_write.setInput(0, h_sheet)
+    place(h_write, hx, 23)
+    backdrop([h_fmt, h_hit, h_cover, h_holes, h_sky], "HDRI sky (synthetic lat-long of the same sheet)", SLATE, 0)
+    backdrop(hdri_nodes, "EzCloudShafts: HDRI sky, and sun behind", GREEN, 0)
+    backdrop(h_sheet_nodes, "HDRI contact sheet", GREY, 0)
+
     # Backdrops and the note.
     backdrop([env_fmt, env_ray, env_p_hit, env_p, env_rgb], "Env render (P + rgb)", SLATE, 0)
     backdrop([cl_fmt, cl_over, cl_ray, cl_hit, cl_z, cl_cover, cl_holes, cl_out], "Clouds render (rgba + depth.Z, overscan)", SLATE, 0)
@@ -395,7 +518,7 @@ def build():
     note.setXYpos(-4 * COL - 200, 0)
 
     check_layout()
-    return shafts, write
+    return shafts, write, hdri_nodes[0], h_write
 
 
 def readme():
@@ -418,6 +541,11 @@ def readme():
         "  3. The gaps must be in the clouds render near where the sun ray meets the sheet.",
         "     Check with Gobo Check and press Analyze for the gobo coverage.",
         "",
+        "HDRI sky (right): the same sheet as a lat-long sky from the camera, keyed by",
+        "colour (cloud key Blue Sky). EzCloudShafts_HDRI casts from it with cast from",
+        "HDRI sky, on a flat deck at 1500 m (curved earth off, as the synthetic sky is flat).",
+        "With the sun behind the camera the clouds render can't reach the ground; the HDRI can.",
+        "",
         "The env and clouds are Expression ray casts with the numbers baked in:",
         "moving ShotCamera here does not re-render them. The Sun Axis can move freely.",
     ])
@@ -434,7 +562,7 @@ def report(shafts):
 
 
 if __name__ == "__main__":
-    shafts_node, write_node = build()
+    shafts_node, write_node, hdri_node, hdri_write = build()
     nuke.scriptSaveAs(OUT_NK, overwrite=1)
     print("saved", OUT_NK)
     if "--render" in sys.argv:
@@ -442,6 +570,15 @@ if __name__ == "__main__":
         shafts_node["cloud_height"].setValue(CLOUD_H)
         nuke.execute(write_node, FRAME, FRAME)
         print("rendered", write_node["file"].evaluate())
+        print("HDRI sky node:")
+        hdri_node["analyze"].execute()
+        print("status", hdri_node["status"].value())
+        nuke.execute(hdri_write, FRAME, FRAME)
+        print("rendered", hdri_write["file"].evaluate())
+        for name in ("HdriCheck3", "HdriCheck4", "HdriCheck5", "HdriCheck6"):
+            n = nuke.toNode(name)
+            print(name, [round(n.sample("red", px, py), 4) for px, py in
+                         ((960, 450), (600, 700), (1500, 800), (300, 950), (1200, 300))])
         for name in ("Shafts_RGB", "Shafts_Alpha", "CloudShadow_Alpha"):
             n = nuke.toNode(name)
             print(name, [round(n.sample("red", px, py), 4) for px, py in

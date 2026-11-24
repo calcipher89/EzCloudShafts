@@ -311,6 +311,99 @@ def check_volumes(surf, sun):
                   % (name, where, err.mean(), 100 * (err < 0.1).mean(), err[~edge].mean(), err.max()))
 
 
+# ---- Cast from an HDRI sky: the lat-long lookup ----------------------------------------------
+# A lat-long sky shot from HDRI_ORIGIN sees the cloud deck (the same holes, on a curved earth).
+# The kernel puts the clouds on a deck at the height it is told, follows each sun ray to it, and
+# reads the sky in that direction from the origin. The sky has no in-frame limit, so the whole
+# ground is covered whatever the sun; the check is how close the matte gets to the true shadow.
+
+EARTH_R = 6371000.0
+
+
+def deck_hit(p, d, height, earth_r):
+    """Where rays p + t d (metres) meet the deck: a flat sheet, or a shell on a curved earth whose
+    ground is at 0 below the HDRI's origin."""
+    if earth_r <= 0:
+        return p + d * ((height - p[..., 1]) / d[..., 1])[..., None]
+    o = CAM_POS * SCALE
+    q = p - np.array([o[0], -earth_r, o[2]])
+    b = np.sum(q * d, -1)
+    c = np.sum(q * q, -1) - (earth_r + height) ** 2
+    return p + d * (np.sqrt(b * b - c) - b)[..., None]
+
+
+def render_hdri(w, rotation=0.0, height=CLOUD_H):
+    """The sky as a lat-long from the camera: alpha = cloud on a curved-earth deck, rows bottom up."""
+    h = w // 2
+    lon = ((np.arange(w) + 0.5) / w - 0.5) * 2 * np.pi + np.radians(rotation)
+    lat = ((np.arange(h) + 0.5) / h - 0.5) * np.pi
+    lon, lat = np.meshgrid(lon, lat)
+    d = np.stack([np.cos(lat) * np.sin(lon), np.sin(lat), -np.cos(lat) * np.cos(lon)], -1)
+    origin = CAM_POS * SCALE
+    a = hole_pattern(*[deck_hit(origin + 0 * d, d, height, EARTH_R)[..., i] for i in (0, 2)])
+    return np.where(d[..., 1] > 0.0, a, 0.0)
+
+
+def hdri_lookup(hdri, p, sun, height=CLOUD_H, earth_r=EARTH_R, rotation=0.0, outside_lit=True):
+    """The kernel's cloudOpacity with useHdri, as sunThrough: the share of the sun that reaches p."""
+    origin = CAM_POS * SCALE
+    hit = deck_hit(p, np.broadcast_to(sun, p.shape), height, earth_r)
+    d = hit - origin
+    d = d / np.linalg.norm(d, axis=-1, keepdims=True)
+    lon = np.arctan2(d[..., 0], -d[..., 2]) - np.radians(rotation)
+    u = lon / (2 * np.pi) + 0.5
+    u = u - np.floor(u)
+    v = np.arcsin(np.clip(d[..., 1], -1, 1)) / np.pi + 0.5
+    hh, hw = hdri.shape
+    a = bilinear(hdri, u * hw, v * hh)
+    out = d[..., 1] <= 0.005
+    lit = 1.0 - np.clip(a, 0, 1)
+    return np.where(out, 1.0 if outside_lit else 0.0, lit), ~out
+
+
+def check_hdri(surf):
+    print("Cast from an HDRI sky (deck %.0f m on a curved earth, %d ground points):" % (CLOUD_H, len(surf)))
+    rot = 37.0
+    hdri = render_hdri(2048, rotation=rot)
+    for name, s in (("ahead", [0.35, 0.6, -0.72]), ("side", [0.8, 0.6, 0.0]), ("behind", [0.0, 0.6, 0.8]),
+                    ("high", [0.1, 0.98, -0.1]), ("low", [0.2, 0.18, -0.96])):
+        s = np.array(s) / np.linalg.norm(s)
+        hit = deck_hit(surf, np.broadcast_to(s, surf.shape), CLOUD_H, EARTH_R)
+        truth = 1.0 - hole_pattern(hit[:, 0], hit[:, 2])
+        row = []
+        for label, kw in (("curved", {}), ("flat", {"earth_r": 0.0}), ("no rot", {"rotation": 0.0}),
+                          ("30% low", {"height": CLOUD_H * 0.7})):
+            args = {"rotation": rot}
+            args.update(kw)
+            lit, inside = hdri_lookup(hdri, surf, s, **args)
+            err = np.abs(lit - truth)
+            row.append("%s %.3f" % (label, err.mean()))
+        print("  sun %-6s: covers %5.1f%%, mean err: %s" % (name, 100 * inside.mean(), ", ".join(row)))
+    s = SUN / np.linalg.norm(SUN)
+    hit = deck_hit(surf, np.broadcast_to(s, surf.shape), CLOUD_H, EARTH_R)
+    truth = 1.0 - hole_pattern(hit[:, 0], hit[:, 2])
+    for w in (512, 1024, 4096):
+        lit, _ = hdri_lookup(render_hdri(w, rotation=rot), surf, s, rotation=rot)
+        err = np.abs(lit - truth)
+        print("  hdri %4d wide: mean err %.3f, within 0.1 on %5.1f%%" % (w, err.mean(), 100 * (err < 0.1).mean()))
+    k = HdriKernel(hdri, rot)
+    P, d = render_scene()
+    lit, free = shafts(k, P, d)
+    ratio = np.where(free > 0, lit / np.maximum(free, 1e-9), 1.0)
+    print("  shafts: lit share %.2f to %.2f, beam contrast (p90 - p10) %.2f"
+          % (ratio.min(), ratio.max(), np.percentile(ratio, 90) - np.percentile(ratio, 10)))
+
+
+class HdriKernel(object):
+    def __init__(self, hdri, rotation):
+        self.hdri, self.rotation = hdri, rotation
+
+    def sun_through(self, p, sun):
+        shape = p.shape
+        lit, inside = hdri_lookup(self.hdri, p.reshape(-1, 3), sun, rotation=self.rotation)
+        return lit.reshape(shape[:-1]), inside.reshape(shape[:-1])
+
+
 def main():
     sun = SUN / np.linalg.norm(SUN)
     P, d = render_scene()
@@ -365,7 +458,9 @@ def main():
             row.append("%3d px %5.1f%%" % (ovs, 100 * inside.mean()))
         print("coverage, sun %-6s: %s" % (name, ", ".join(row)))
 
-    check_volumes(surf, sun)
+    check_hdri(surf)
+    if os.environ.get("SKIP_VOLUMES") != "1":
+        check_volumes(surf, sun)
 
 
 if __name__ == "__main__":
