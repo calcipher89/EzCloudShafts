@@ -27,7 +27,7 @@ import layout_hints  # noqa: E402
 import node_layout  # noqa: E402
 
 # Shown on the node; bump it with each tagged release.
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 KERNEL = "EzCloudShafts"
 # Nuke's own hash of the kernel, as it saves it in KernelDescription. With a wrong one the node
 # loads with no error, but every render through it is silently cancelled, so the viewer sits
@@ -1105,7 +1105,9 @@ def group_expressions():
     lines = ['sun_in_use {%s}' % " ".join(
         '{"sun_source==1 ? axis_position.%s : sun_source==2 ? atm_sun.%s : sun_direction.%s"}' % (c, c, c)
         for c in "xyz")]
-    lines.append('sun_rotation_in_use {{"sun_source==2 ? atm_rotation : 0"}}')
+    # EzAtmosScatter's 'sun in use' is already in world space: its light probe measures the sun
+    # from the HDRI turned by its hdri rotation. Turning it again put the sun off by that angle.
+    lines.append('sun_rotation_in_use 0')
     lines.append('hdri_rotation_in_use {{"hdri_from==1 && atm_found ? atm_rotation : hdri_rotation"}}')
     return lines
 
